@@ -1,0 +1,25 @@
+[project]
+name = "rag-mvp"
+version = "0.1.0"
+description = "Add your description here"
+requires-python = ">=3.13"
+dependencies = [
+    "backoff>=2.2.1",
+    "docx2txt>=0.9",
+    "fastapi>=0.116.1",
+    "langchain>=0.3.27",
+    "langchain-community>=0.3.27",
+    "openai>=0.28.0",
+    "pandas>=2.3.1",
+    "pandas-stubs==2.3.0.250703",
+    "pgvector>=0.4.1",
+    "playwright>=1.54.0",
+    "psycopg2-binary>=2.9.10",
+    "pyee>=13.0.0",
+    "pypdf2>=3.0.1",
+    "python-dotenv>=1.1.1",
+    "python-multipart>=0.0.20",
+    "tiktoken>=0.10.0",
+    "unstructured>=0.18.11",
+    "uvicorn>=0.35.0",
+]

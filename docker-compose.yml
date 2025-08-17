@@ -1,0 +1,42 @@
+services:
+  db:
+    image: pgvector/pgvector:0.7.4-pg15
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: example
+      POSTGRES_DB: ragdb
+    ports:
+      - '5432:5432'
+    volumes:
+      - ./db/init:/docker-entrypoint-initdb.d:ro
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d ragdb"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - rag-network
+
+  app:
+    build: .
+    env_file:
+      - .env
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - '8000:8000'
+    environment:
+      - DATABASE_URL=postgresql://postgres:example@db:5432/ragdb
+    networks:
+      - rag-network
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+
+networks:
+  rag-network:
+    driver: bridge
