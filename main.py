@@ -19,7 +19,8 @@ import anyio
 
 from constants import (
     EMBEDDING_MODEL, CHAT_MODEL, TEMPERATURE, DEFAULT_NAMESPACE,
-    VECTOR_SEARCH_LIMIT, MAX_CHUNKS_PER_SOURCE
+    VECTOR_SEARCH_LIMIT, MAX_CHUNKS_PER_SOURCE,
+    SYSTEM_PROMPT
 )
 from utils import (
     get_embeddings, get_text_splitter, scrape_with_playwright, parse_sitemap,
@@ -31,7 +32,7 @@ load_dotenv()
 app = FastAPI(title="RAG Service", description="Unified ingestion and query service")
 
 
-def connect_to_database(max_retries=30, delay=2):
+def connect_to_database(max_retries=5, delay=5):
     """Connect to database with retry logic"""
     for attempt in range(max_retries):
         try:
@@ -42,7 +43,7 @@ def connect_to_database(max_retries=30, delay=2):
             return conn
         except psycopg2.OperationalError as e:
             print(f"❌ Database connection failed: {e}")
-            if attempt < max_retries - 1:
+            if attempt < max_retries:
                 print(f"Retrying in {delay} seconds...")
                 time.sleep(delay)
             else:
@@ -64,37 +65,12 @@ embeddings_instance = OpenAIEmbeddings(
     model=EMBEDDING_MODEL,
     openai_api_key=os.getenv("OPENAI_API_KEY")
 )
+
 safe_embed = get_embeddings()
 splitter = get_text_splitter()
 llm = ChatOpenAI(model_name=CHAT_MODEL, temperature=TEMPERATURE)
 
-# System prompt for the RAG assistant
-SYSTEM_PROMPT = """
-You are Stafford Global's official student advisor bot.
-
-CRITICAL FACTS:
-- Stafford Global is an EDUCATION AGENCY and EDUCATIONAL ADVISOR that represents UK universities
-- Stafford Global has partnerships with UK universities and helps students access their programs
-- The actual degrees are awarded by the partner universities (Derby, London Business School, etc.)
-- Your role is to advise students about programs available through Stafford Global's university partnerships
-
-INSTRUCTIONS:
-– Use *only* the provided context and conversation history
-– NEVER mix information from different universities - keep each institution's offerings separate
-– Be CONCISE - avoid unnecessary repetition or lengthy explanations
-– For exploratory questions ("I want to study business"), present options from different
-universities separately using their actual names from the context:
-   * "University of Derby offers: [their specific programs]"
-   * "London Business School offers: [their specific programs]"  
-– For specific questions about one university, provide detailed information about that institution only
-– For follow-up questions about "other options" or "alternatives":
-   * If no other options exist, simply say "No, that's the only [type] program available through Stafford Global"
-   * Don't repeat information already provided unless specifically asked
-– When discussing programs, mention they are offered by the partner universities through Stafford Global
-– If you don't have clear information connecting a program to a specific university, say so
-– Do NOT hallucinate or combine partial information from different sources
-"""
-
+# this should ideally be a function "build_prompt(chat_history, context_blocks, question)"
 prompt = ChatPromptTemplate.from_messages([
     SystemMessagePromptTemplate.from_template(SYSTEM_PROMPT),
     HumanMessagePromptTemplate.from_template(
@@ -174,9 +150,11 @@ async def ingest_bulk_urls(request: BulkURLRequest):
                 continue
             
             # Embed chunks
-            vectors = safe_embed([d.page_content for d in docs])
-            
+            vectors = safe_embed([d.page_content for d in docs]) 
+     
             # Store in database
+            # TODO: store data in a data structure and do bulk update outside the loop, can be made a function and ideally
+            # be used in ingest_documents as well
             for doc, vec in zip(docs, vectors):
                 cur.execute(
                     "INSERT INTO documents (content, embedding, source, doc_type, namespace) "
@@ -235,6 +213,7 @@ async def ingest_documents(request: BulkDocumentRequest):
             vectors = safe_embed([d.page_content for d in docs])
             
             # Store in database
+            # TODO: store data in a data structure and do bulk update outside the loop
             for chunk_doc, vec in zip(docs, vectors):
                 cur.execute(
                     "INSERT INTO documents (content, embedding, source, doc_type, namespace) "
@@ -340,6 +319,8 @@ def query(
 
 
 # Document management endpoints
+# "/documents" with "get" returns a list and with "delete" deletes!? i'd preffer different paths just to be safe
+# haven't been using REST lately so i might be wrong jzk
 @app.get("/documents")
 async def list_documents(
     namespace: str = None,
@@ -393,7 +374,7 @@ async def list_documents(
         "offset": offset
     }
 
-
+# it only deletes one document so url is misleading
 @app.delete("/documents/{document_id}")
 async def delete_document(document_id: int):
     """Delete a specific document by ID"""
@@ -405,7 +386,7 @@ async def delete_document(document_id: int):
     conn.commit()
     return {"status": "deleted", "document_id": document_id}
 
-
+# url name and function name don't match
 @app.delete("/documents")
 async def delete_documents_by_filter(source: str = None, namespace: str = None):
     """Delete documents by source or namespace"""

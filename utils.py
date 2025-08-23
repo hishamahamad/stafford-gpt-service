@@ -39,34 +39,23 @@ async def scrape_with_playwright(url: str) -> str:
         page = await browser.new_page()
         
         try:
-            # Go to URL
-            await page.goto(url, wait_until="domcontentloaded", timeout=SCRAPE_TIMEOUT)
+            # Go to URL and wait for network idle in one step
+            await page.goto(url, wait_until="networkidle", timeout=SCRAPE_TIMEOUT)
             
-            # Wait for network to be idle (no requests for 500ms)
-            await page.wait_for_load_state("networkidle", timeout=NETWORK_IDLE_TIMEOUT)
-            
-            # Additional wait for any remaining dynamic content
-            await page.wait_for_timeout(CONTENT_WAIT_TIME)
-            
-            # Remove unwanted elements
-            for selector in SELECTORS_TO_REMOVE:
-                await page.evaluate(f"""
-                    document.querySelectorAll('{selector}').forEach(el => el.remove());
-                """)
-            
-            # Get the content
-            content = await page.content()
-            
-            # Extract just the text content
-            text_content = await page.evaluate("""
-                () => {
+            # Remove unwanted elements and extract text in a single evaluate call
+            text_content = await page.evaluate(f"""
+                () => {{
+                    // Remove unwanted elements
+                    {repr(SELECTORS_TO_REMOVE)}.forEach(selector => {{
+                        document.querySelectorAll(selector).forEach(el => el.remove());
+                    }});
+                    
                     // Remove script and style elements
-                    const scripts = document.querySelectorAll('script, style');
-                    scripts.forEach(el => el.remove());
+                    document.querySelectorAll('script, style').forEach(el => el.remove());
                     
                     // Get clean text content
                     return document.body.innerText || document.body.textContent || '';
-                }
+                }}
             """)
             
             await browser.close()
@@ -74,7 +63,7 @@ async def scrape_with_playwright(url: str) -> str:
             
         except Exception as e:
             await browser.close()
-            raise Exception(f"Failed to scrape {url}: {str(e)}")
+            raise Exception(f"Failed to scrape {{url}}: {{str(e)}}")
 
 
 def parse_sitemap(sitemap_url: str) -> List[str]:
