@@ -16,6 +16,7 @@ from langchain.docstore.document import Document
 from pgvector.psycopg2 import register_vector
 import psycopg2
 import anyio
+from fastapi.middleware.cors import CORSMiddleware
 
 from constants import (
     EMBEDDING_MODEL, CHAT_MODEL, TEMPERATURE, DEFAULT_NAMESPACE,
@@ -30,6 +31,24 @@ from utils import (
 load_dotenv()
 
 app = FastAPI(title="RAG Service", description="Unified ingestion and query service")
+
+# CORS middleware for localhost
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost",
+        "http://localhost:3000",
+        "http://localhost:5173",
+        "http://localhost:5174",
+        "http://127.0.0.1",
+        "http://127.0.0.1:3000",
+        "http://127.0.0.1:5173",
+        "http://127.0.0.1:5174"
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"]
+)
 
 
 def connect_to_database(max_retries=5, delay=5):
@@ -150,8 +169,8 @@ async def ingest_bulk_urls(request: BulkURLRequest):
                 continue
             
             # Embed chunks
-            vectors = safe_embed([d.page_content for d in docs]) 
-     
+            vectors = safe_embed([d.page_content for d in docs])
+
             # Store in database
             # TODO: store data in a data structure and do bulk update outside the loop, can be made a function and ideally
             # be used in ingest_documents as well
@@ -327,24 +346,25 @@ async def list_documents(
     limit: int = 100,
     offset: int = 0
 ):
-    """List documents in the knowledge base"""
+    """List documents in the knowledge base, including chunk count for each document."""
     query = """
-    SELECT id, source, doc_type, namespace, created_at, 
-           LEFT(content, 200) as content_preview
+    SELECT id, source, doc_type, namespace, created_at,
+           LEFT(content, 200) as content_preview,
+           (SELECT COUNT(*) FROM documents d2 WHERE d2.source = documents.source AND d2.namespace = documents.namespace) as chunks_count
     FROM documents
     """
     params = []
-    
+
     if namespace:
         query += " WHERE namespace = %s"
         params.append(namespace)
-    
+
     query += " ORDER BY created_at DESC LIMIT %s OFFSET %s"
     params.extend([limit, offset])
-    
+
     cur.execute(query, params)
     results = cur.fetchall()
-    
+
     documents = []
     for row in results:
         documents.append({
@@ -353,20 +373,21 @@ async def list_documents(
             "doc_type": row[2],
             "namespace": row[3],
             "created_at": row[4].isoformat() if row[4] else None,
-            "content_preview": row[5]
+            "content_preview": row[5],
+            "chunks_count": row[6]
         })
-    
+
     # Get total count
     count_query = "SELECT COUNT(*) FROM documents"
     count_params = []
-    
+
     if namespace:
         count_query += " WHERE namespace = %s"
         count_params.append(namespace)
-    
+
     cur.execute(count_query, count_params)
     total = cur.fetchone()[0]
-    
+
     return {
         "documents": documents,
         "total": total,

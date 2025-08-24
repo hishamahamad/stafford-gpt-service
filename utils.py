@@ -197,3 +197,4 @@ def group_context_by_source(rows, max_chunks_per_source=3):
         context_blocks.append(f"[University/Source {i+1}: {source}]\n{combined_text}")
     
     return "\n\n".join(context_blocks)
+
