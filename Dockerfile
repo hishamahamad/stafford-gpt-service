@@ -1,53 +1,30 @@
-FROM python:3.11-slim
+FROM python:3.13-slim
 
+# Set working directory
 WORKDIR /app
 
-# Install system dependencies
+# Install system dependencies and uv
 RUN apt-get update && apt-get install -y \
     build-essential \
     curl \
-    software-properties-common \
-    git \
-    libnss3-dev \
-    libxss1 \
-    libasound2-dev \
-    libxtst6 \
-    libxrandr2 \
-    libasound2 \
-    libpangocairo-1.0-0 \
-    libatk1.0-0 \
-    libcairo2 \
-    libgtk-3-0 \
-    libgdk-pixbuf2.0-0 \
-    libxcomposite1 \
-    libxcursor1 \
-    libxdamage1 \
-    libxi6 \
-    libxtst6 \
-    libnss3 \
-    libcups2 \
-    libxss1 \
-    libxrandr2 \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && pip install uv
 
-# Copy requirements and install Python dependencies
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# Copy project files
+COPY pyproject.toml uv.lock ./
 
-# Install Playwright browsers properly
-RUN playwright install-deps chromium
-RUN playwright install chromium
+# Install dependencies using uv
+RUN uv sync --frozen
 
-# Copy source code
-COPY main.py .
-COPY constants.py .
-COPY utils.py .
+# Install Playwright browsers
+RUN uv run playwright install chromium
+RUN uv run playwright install-deps
 
-# Set Playwright environment
-ENV PLAYWRIGHT_BROWSERS_PATH=/root/.cache/ms-playwright
+# Copy application code
+COPY . .
 
 # Expose port
 EXPOSE 8000
 
-# Run the application
-CMD ["python", "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Run the application using uv with hot reload
+CMD ["uv", "run", "uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
