@@ -256,7 +256,38 @@ class ContentRequest(BaseModel):
 
 
 class IngestionResponse(BaseModel):
-    """Response model for ingestion operations."""
+    """Response model for data ingestion operations."""
     status: str
     message: str
-    details: Optional[Dict[str, Any]] = None
+    details: dict
+
+
+class ProgramDetailsResponse(BaseModel):
+    """Response model for program details by variant ID."""
+    program_variant_id: str
+    university_id: str
+    university_name: str
+    program_identifier: str
+    program_type: str
+    program_name: str
+    basic_info: Optional[Dict[str, Any]] = None
+    duration: Optional[Dict[str, Any]] = None
+    fees: Optional[Dict[str, Any]] = None
+    intake_info: Optional[Dict[str, Any]] = None
+    curriculum: Optional[Dict[str, Any]] = None
+    accreditation: Optional[Dict[str, Any]] = None
+    career_outcomes: Optional[Dict[str, Any]] = None
+    entry_requirements: Optional[Dict[str, Any]] = None
+    geographic_focus: Optional[Dict[str, Any]] = None
+    academic_progression: Optional[AcademicProgression] = None
+    completion_rates: Optional[Dict[str, Any]] = None
+    support_services: Optional[Dict[str, Any]] = None
+    status: str = "success"
+
+
+class AllProgramsResponse(BaseModel):
+    """Response model for all programs listing."""
+    programs: List[ProgramDetailsResponse]
+    total_count: int
+    status: str = "success"
+

@@ -55,6 +55,7 @@ CREATE TABLE IF NOT EXISTS program_variants (
     faculty JSONB,
     testimonials JSONB,
     geographic_focus JSONB,
+    academic_progression JSONB,
     technology_platform JSONB,
     completion_rates JSONB,
     contact_info JSONB,

@@ -13,6 +13,21 @@ async def scrape_with_playwright(url: str) -> Optional[str]:
             await page.goto(url, timeout=settings.scrape_timeout)
             await page.wait_for_timeout(settings.content_wait_time)
 
+            # Force accordion tab content to be visible by setting display: block
+            # This ensures content hidden in Elementor accordion tabs is accessible
+            await page.evaluate('''
+                document.querySelectorAll('[id*="elementor-tab-content-"]').forEach(el => {
+                    el.style.display = 'block !important';
+                    el.style.visibility = 'visible';
+                    el.style.opacity = '1';
+                    el.style.height = 'auto';
+                    el.style.overflow = 'visible';
+                });
+            ''')
+
+            # Wait a moment for any dynamic content to load after making tabs visible
+            await page.wait_for_timeout(1000)
+
             # Remove unwanted elements
             selectors_to_remove = [
                 'nav', 'header', 'footer', '.navigation', '.nav',

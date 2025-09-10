@@ -676,45 +676,26 @@ class PromptsService:
         has_duration_filter = any(item.get('meets_duration') is not None for item in grounded_json.get('items', []))
 
         prompt_text = f"""
-        Task: Provide a HIGHLY DETAILED, comprehensive answer from the grounded_json data.
+        Task: Provide a comprehensive but concise answer from the grounded_json data. Keep response under 300 words.
         
-        DETAILED RESPONSE REQUIREMENTS:
-        - Write 3-5+ paragraphs for specific programs, not just bullet points
-        - Include ALL available information (fees, duration, intakes, modules, requirements, etc.)
-        - For fees: Include payment plans, installment details, currency, any discounts
-        - For duration: Include flexibility, part-time/full-time options, study patterns
-        - For intakes: Include multiple intake dates, application deadlines, enrollment process
-        - For modules/curriculum: List specific subjects, core modules, elective modules (if any), assessment methods
-        - Add contextual information about the university's reputation, accreditation, career outcomes
-        - Include practical details like delivery method (online/hybrid), support services, alumni network
-        - Mention application process, entry requirements, and next steps
-        - Use engaging, professional tone that builds confidence in the program
+        RESPONSE REQUIREMENTS:
+        - Include key information: fees, duration, intakes, modules, requirements
+        - For fees: Include payment options and currency
+        - For duration: Include study options and flexibility
+        - For intakes: Include key dates and application process
+        - Use engaging, professional tone
+        - Focus on most relevant details for the question
         
-        Response Structure Guidelines:
-        - SPECIFIC MODE: 
-          * Start with compelling program introduction (university reputation + program overview)
-          * Dedicated section for program structure and curriculum details
-          * Comprehensive fees and payment information
-          * Detailed intake and application process
-          * Benefits, career outcomes, and student support
-          * Clear call-to-action for next steps
-        
-        - EXPLORATORY MODE:
-          * Detailed comparison of multiple programs
-          * Highlight unique features of each option
-          * Include pros/cons or suitability factors
-        
-        - COMPARE MODE:
-          * Detailed side-by-side analysis
-          * Feature comparison tables in prose form
-          * Recommendation based on different student profiles
+        Response Structure:
+        - SPECIFIC MODE: Program overview, key details, fees, intakes, next steps
+        - EXPLORATORY MODE: Compare top programs with key differentiators
+        - COMPARE MODE: Side-by-side analysis with clear recommendations
         
         IMPORTANT: 
-        - Don't just list facts - explain WHY they matter to students
-        - Use specific numbers, dates, and concrete details when available
-        - Make the response feel comprehensive and authoritative
-        - Include emotional appeal and practical considerations
-        - If information is limited, acknowledge it but focus on what IS available
+        - Be concise but informative
+        - Use specific numbers and dates when available
+        - Explain why details matter to students
+        - If limited info, focus on what IS available
         
         Budget filtering applied: {has_budget_filter}
         Duration filtering applied: {has_duration_filter}
@@ -726,7 +707,7 @@ class PromptsService:
 
         try:
             messages = [
-                SystemMessage(content="You are Stafford Global's senior education consultant providing comprehensive, detailed program guidance. Your responses should be thorough, professional, and highly informative - the kind of detailed information a prospective student would expect from a premium education consultancy."),
+                SystemMessage(content="You are Stafford Global's education consultant. Provide comprehensive but concise program guidance. Keep responses under 300 words while being thorough and professional."),
                 HumanMessage(content=prompt_text)
             ]
 

@@ -99,8 +99,8 @@ IMPORTANT EXTRACTION RULES:
 1. Extract ONLY factual information explicitly stated in the content
 2. If information is not available, use null
 3. For fees, look for exact amounts and installment details
-4. For duration, extract in months only. If only years is mentioned, convert it to months and extract
-5. For modules, extract exact module names if listed
+4. For duration, extract in months only. If only years is mentioned, convert it to months and extract. If "Paid Monthly" is mentioned, then its a 1-month instalment
+5. For modules, extract ALL module names listed - do not miss any
 6. For intakes, extract specific dates or periods mentioned
 7. Be conservative - don't invent or assume information
 
@@ -133,11 +133,11 @@ Return ONLY valid JSON following this structure:
   }},
   "fees": {{
     "currency": "GBP|USD|EUR or null",
-    "total_fee": "number or null",
-    "instalment_fee": "monthly/periodic fee or null",
-    "instalment_period": "period in months or null",
-    "discounted_total_fee": "discounted total or null",
-    "discounted_instalment_fee": "discounted installment or null"
+    "total_fee": "number, before any discounts. If discount exists, total_fee and discounted_fee will never be the same. Never null.",
+    "instalment_fee": "monthly/periodic fee, without any discounts. Obtained by dividing total_fee by instalment period. Never null.",
+    "instalment_period": "period in months or null. If "Paid Monthly" is mentioned, the period is 1",
+    "discounted_total_fee": "Discounted total course fee, usually also called early bird or launch fee. If no discounts, then null",
+    "discounted_instalment_fee": "If discounted fee is available, obtain by dividing discounted_total_fee by instalment period"
   }},
   "intake_info": {{
     "next_intake": "next intake if mentioned or null",
@@ -147,11 +147,16 @@ Return ONLY valid JSON following this structure:
     "current_availability": "available|limited|closed or null"
   }},
   "entry_requirements": {{
-    "degree_requirement": ["Use standard degree names from the available types above, or extract exact requirements if mentioned"],
+    "degree_requirement": ["Extract exact requirements if mentioned, don't mention work experience here"],
     "english_requirement": {{
       "required_if_non_native": true|false|null,
       "ielts_score": "number or null",
       "toefl_score": "number or null",
+      "pearson_pte_score": "number or null",
+      "cambridge_certificate": "true|false|null",
+      "london_test": "number or null",
+      "international_gce_o_level_english": "string or null",
+      "international_gcse_english": "string or null",
       "english_interview_option": true|false|null,
       "other_accepted_tests": ["array of accepted tests or null"]
     }},
@@ -205,6 +210,11 @@ Return ONLY valid JSON following this structure:
     "average_salary_increase": "text or null",
     "notable_alumni_companies": ["array if mentioned or null"]
   }},
+  "academic_progression": {{
+    further_study_options: ["List specific programs or qualifications that graduates of this program are eligible to pursue, or null if not mentioned"],
+    credit_transfer_options: true|false|null
+    articulation_agreements: ["List of articulation agreements or null"]
+  }}
   "geographic_focus": {{
     "target_regions": ["array of regions or null"],
     "local_relevance": true|false|null,
@@ -219,7 +229,7 @@ Return ONLY valid JSON following this structure:
 }}
 
 WEBPAGE CONTENT:
-{content[:8000]}  # Limit content to avoid token limits
+{content[:12000]}  # Limit content to avoid token limits
 """
 
         messages = [

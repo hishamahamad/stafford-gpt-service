@@ -73,7 +73,16 @@ class DataAccessService:
                 p.program_name as program_name,
                 pv.basic_info,
                 pv.duration,
-                pv.fees
+                pv.fees,
+                pv.intake_info,
+                pv.curriculum,
+                pv.accreditation,
+                pv.career_outcomes,
+                pv.entry_requirements,
+                pv.geographic_focus,
+                pv.completion_rates,
+                pv.support_services,
+                pv.academic_progression
             FROM program_variants pv
             JOIN universities u ON pv.university_id = u.id
             JOIN programs p ON pv.program_id = p.id
@@ -87,6 +96,39 @@ class DataAccessService:
             return {row['program_variant_id']: dict(row) for row in results}
         except Exception as e:
             return {}
+        finally:
+            cur.close()
+
+    def get_all_programs(self) -> List[Dict[str, Any]]:
+        """Get all active programs with basic information."""
+        cur = self.conn.cursor(cursor_factory=RealDictCursor)
+
+        query = """
+            SELECT 
+                pv.program_variant_id,
+                u.id as university_id,
+                u.name as university_name,
+                p.university as program_identifier,
+                p.program_type as program_type,
+                p.program_name as program_name,
+                pv.basic_info,
+                pv.duration,
+                pv.fees,
+                pv.created_at,
+                pv.updated_at
+            FROM program_variants pv
+            JOIN universities u ON pv.university_id = u.id
+            JOIN programs p ON pv.program_id = p.id
+            WHERE pv.active = true
+            ORDER BY u.name, p.program_name
+        """
+
+        try:
+            cur.execute(query)
+            results = cur.fetchall()
+            return [dict(row) for row in results]
+        except Exception as e:
+            return []
         finally:
             cur.close()
 
@@ -172,8 +214,8 @@ class DataAccessService:
                     entry_requirements, accreditation, curriculum, assessment,
                     support_services, career_outcomes,
                     academic_progression, faculty, testimonials, geographic_focus,
-                    technology_platform, completion_rates, contact_info, metadata
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    technology_platform, completion_rates, academic_progression, contact_info, metadata
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (program_variant_id) DO UPDATE SET
                     university_id = EXCLUDED.university_id,
                     program_id = EXCLUDED.program_id,
@@ -194,6 +236,7 @@ class DataAccessService:
                     geographic_focus = EXCLUDED.geographic_focus,
                     technology_platform = EXCLUDED.technology_platform,
                     completion_rates = EXCLUDED.completion_rates,
+                    academic_progression = EXCLUDED.academic_progression,
                     contact_info = EXCLUDED.contact_info,
                     metadata = EXCLUDED.metadata,
                     updated_at = CURRENT_TIMESTAMP
@@ -218,6 +261,7 @@ class DataAccessService:
                 json.dumps(program_data.get('faculty')),
                 json.dumps(program_data.get('testimonials')),
                 json.dumps(program_data.get('geographic_focus')),
+                json.dumps(program_data.get('academic_progression')),
                 json.dumps(program_data.get('technology_platform')),
                 json.dumps(program_data.get('completion_rates')),
                 json.dumps(program_data.get('contact_info')),
