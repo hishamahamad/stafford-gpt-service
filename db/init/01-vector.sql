@@ -41,6 +41,8 @@ CREATE TABLE IF NOT EXISTS program_variants (
     program_id INTEGER REFERENCES programs(id),
     url TEXT,
     basic_info JSONB NOT NULL,
+    program_overview TEXT NOT NULL,
+    program_benefits JSONB,
     duration JSONB NOT NULL,
     fees JSONB,
     intake_info JSONB,

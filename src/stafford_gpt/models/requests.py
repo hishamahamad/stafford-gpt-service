@@ -208,6 +208,8 @@ class ProgramDataRequest(BaseModel):
 
     # Comprehensive nested data (all optional for gradual adoption)
     basic_info: BasicInfo
+    program_overview: str
+    program_benefits: Optional[List[str]] = None
     duration: Duration
     fees: Optional[Fees] = None
     intake_info: Optional[IntakeInfo] = None
@@ -271,6 +273,8 @@ class ProgramDetailsResponse(BaseModel):
     program_type: str
     program_name: str
     basic_info: Optional[Dict[str, Any]] = None
+    program_overview: str
+    program_benefits: Optional[List[str]] = None
     duration: Optional[Dict[str, Any]] = None
     fees: Optional[Dict[str, Any]] = None
     intake_info: Optional[Dict[str, Any]] = None

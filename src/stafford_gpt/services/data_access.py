@@ -72,6 +72,8 @@ class DataAccessService:
                 p.program_type as program_type,
                 p.program_name as program_name,
                 pv.basic_info,
+                pv.program_overview,
+                pv.program_benefits,
                 pv.duration,
                 pv.fees,
                 pv.intake_info,
@@ -210,17 +212,19 @@ class DataAccessService:
             upsert_query = """
                 INSERT INTO program_variants (
                     program_variant_id, university_id, program_id, url,
-                    basic_info, duration, fees, intake_info,
+                    basic_info, program_overview, program_benefits,duration, fees, intake_info,
                     entry_requirements, accreditation, curriculum, assessment,
                     support_services, career_outcomes,
                     academic_progression, faculty, testimonials, geographic_focus,
                     technology_platform, completion_rates, academic_progression, contact_info, metadata
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (program_variant_id) DO UPDATE SET
                     university_id = EXCLUDED.university_id,
                     program_id = EXCLUDED.program_id,
                     url = EXCLUDED.url,
                     basic_info = EXCLUDED.basic_info,
+                    program_overview = EXCLUDED.program_overview,
+                    program_benefits = EXCLUDED.program_benefits,
                     duration = EXCLUDED.duration,
                     fees = EXCLUDED.fees,
                     intake_info = EXCLUDED.intake_info,
@@ -249,6 +253,8 @@ class DataAccessService:
                 program_data.get('url'),
                 json.dumps(basic_info),
                 json.dumps(duration),
+                json.dumps(program_data.get('program_overview')),
+                json.dumps(program_data.get('program_benefits')),
                 json.dumps(program_data.get('fees')),
                 json.dumps(program_data.get('intake_info')),
                 json.dumps(program_data.get('entry_requirements')),

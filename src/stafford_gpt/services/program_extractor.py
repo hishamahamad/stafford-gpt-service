@@ -120,8 +120,12 @@ Return ONLY valid JSON following this structure:
   "basic_info": {{
     "program_name": "extract specific specialization/variant name from content or null",
     "program_type": "{program_type_name}",
+    "degree_type": "{degree_type_name}",
     "university_name": "{university_name}",
+    "university_location": "UK",
   }},
+  "program_overview": "Unaltered summary of the program, never null",
+  "program_benefits": ["array of benefits or null"],
   "duration": {{
     "months": "integer months or null",
     "delivery_mode": "online|online+workshop or null",
@@ -133,11 +137,11 @@ Return ONLY valid JSON following this structure:
   }},
   "fees": {{
     "currency": "GBP|USD|EUR or null",
-    "total_fee": "number, before any discounts. If discount exists, total_fee and discounted_fee will never be the same. Never null.",
-    "instalment_fee": "monthly/periodic fee, without any discounts. Obtained by dividing total_fee by instalment period. Never null.",
+    "total_fee": "number, before any discounts. If discount exists, total_fee and discounted_fee will never be the same. Never null and must not match discounted_total_fee.",
+    "instalment_fee": "Obtained by dividing total_fee by number of instalment periods. Never null and must not match discounted_instalment_fee.",
     "instalment_period": "period in months or null. If "Paid Monthly" is mentioned, the period is 1",
     "discounted_total_fee": "Discounted total course fee, usually also called early bird or launch fee. If no discounts, then null",
-    "discounted_instalment_fee": "If discounted fee is available, obtain by dividing discounted_total_fee by instalment period"
+    "discounted_instalment_fee": "If discounted fee is available, obtain by dividing discounted_total_fee by number of instalment periods"
   }},
   "intake_info": {{
     "next_intake": "next intake if mentioned or null",
@@ -180,7 +184,7 @@ Return ONLY valid JSON following this structure:
       {{
         "module_name": "exact name",
         "credits": "number or null",
-        "description": "description if available"
+        "description": "full description of the module"
       }}
     ],
     "optional_modules": ["array or null"],
@@ -229,7 +233,7 @@ Return ONLY valid JSON following this structure:
 }}
 
 WEBPAGE CONTENT:
-{content[:12000]}  # Limit content to avoid token limits
+{content[:40000]}  # Limit content to avoid token limits
 """
 
         messages = [
