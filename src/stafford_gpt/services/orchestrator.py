@@ -1,24 +1,26 @@
 """
 Main orchestration service for the Stafford Global GPT system.
-Implements the complete pipeline with enhanced query processing.
+Implements the complete pipeline with simplified query processing.
 """
-
+import logging
 import uuid
 from typing import Dict, List, Any, Optional
 
 from .query_processing import PromptsService
+from .simple_query_processor import SimpleQueryProcessor
 from .data_access import DataAccessService
 
 
 class OrchestratorService:
     """
-    Main orchestration service with enhanced query intelligence.
-    Uses only canonical program data as the source of truth.
+    Main orchestration service with simplified query intelligence.
+    Works directly with program_variant_ids without complex specialization logic.
     """
 
     def __init__(self, data_access: DataAccessService):
         self.data_access = data_access
         self.prompts = PromptsService()
+        self.simple_processor = SimpleQueryProcessor()
 
     def process_query(
         self,
@@ -26,15 +28,7 @@ class OrchestratorService:
         session_id: Optional[str] = None
     ) -> Dict[str, Any]:
         """
-        Simplified query processing pipeline using only canonical data.
-
-        Steps:
-        1. Classify scope (specific/exploratory/compare)
-        2. Resolve to program_variant_ids if possible
-        3. Load canonical data from rows
-        4. Ground facts (canonical data only)
-        5. Check consistency
-        6. Render final answer
+        Simplified query processing pipeline.
         """
         try:
             # Generate session ID if not provided
@@ -46,43 +40,46 @@ class OrchestratorService:
             if history is None:
                 history = ""
 
-            # Step 1: Classify scope
-            scope = self.prompts.classify_scope(question, history)
-            if scope is None:
-                scope = {"mode": "exploratory", "universities": [], "programs": [], "fields": ["overview"]}
+            # Get all available program variant IDs first
+            all_programs = self.data_access.get_all_programs()
+            available_program_ids = [prog['program_variant_id'] for prog in all_programs]
 
-            # Step 2: Resolve program variants if scope allows
+            # Step 1: Simple scope classification and program matching
+            scope = self.simple_processor.build_simple_scope(question, history, available_program_ids)
+
+            # Step 2: Get program variant IDs based on scope
             program_variant_ids = []
-            if scope and scope.get("mode") in ["specific", "compare"]:
-                program_variant_ids = self.data_access.resolve_program_variants(scope)
-                if program_variant_ids is None:
-                    program_variant_ids = []
+
+            if scope.get("mode") == "specific":
+                # Use directly matched programs from simple processor
+                if scope.get("matched_programs"):
+                    program_variant_ids = scope["matched_programs"]
+                else:
+                    # Fallback to data access resolution
+                    program_variant_ids = self.data_access.resolve_program_variants(scope)
+            elif scope.get("mode") == "exploratory":
+                # For exploratory, get a diverse sample across universities and program types
+                diverse_programs = self._get_diverse_program_sample(available_program_ids)
+                program_variant_ids = diverse_programs
+            elif scope.get("mode") == "greeting":
+                # For greetings, don't load any program data
+                program_variant_ids = []
 
             # Step 3: Load canonical data
             rows = {}
             if program_variant_ids:
                 rows = self.data_access.get_canonical_data(program_variant_ids)
-                if rows is None:
-                    rows = {}
 
-            # Step 4: Ground facts (canonical data only)
-            grounded = self.prompts.ground_facts(scope, rows, {})  # Empty chunks
-            if grounded is None:
-                grounded = {"mode": scope.get("mode", "exploratory"), "items": []}
+            # Step 4: Ground facts (simplified - no specialization complexity)
+            grounded = self.prompts.ground_facts(scope, rows, {})
 
             # Step 5: Check consistency
             consistency_check = self.prompts.check_consistency(grounded)
-            if consistency_check is None:
-                consistency_check = {"ok": True, "problems": [], "fixes": {"drop_fields": [], "drop_items": []}}
-
-            # Apply fixes if needed
             if not consistency_check.get("ok", True):
                 grounded = self._apply_consistency_fixes(grounded, consistency_check)
 
             # Step 6: Render final answer
             answer = self.prompts.render_answer(question, grounded, history)
-            if answer is None:
-                answer = "I apologize, but I'm unable to provide an answer at the moment due to a technical issue."
 
             # Store conversation
             self.data_access.store_message(session_id, "user", question)
@@ -91,7 +88,7 @@ class OrchestratorService:
             return {
                 "answer": answer,
                 "session_id": session_id,
-                "scope": scope or {},
+                "scope": scope,
                 "program_variant_ids": program_variant_ids,
                 "consistency_issues": consistency_check.get("problems", []) if consistency_check else []
             }
@@ -174,3 +171,25 @@ class OrchestratorService:
                         del item["fields"][field_name]
 
         return grounded
+
+    def _get_diverse_program_sample(self, available_program_ids: List[str]) -> List[str]:
+        """
+        Get a diverse sample of programs across different universities.
+        Simple approach: group by university and take 1-2 programs from each.
+        """
+        # Group programs by university (first part of program_variant_id)
+        programs_by_uni = {}
+        for program_id in available_program_ids:
+            university = program_id.split('_')[0] if '_' in program_id else 'unknown'
+            if university not in programs_by_uni:
+                programs_by_uni[university] = []
+            programs_by_uni[university].append(program_id)
+
+        # Take 1-2 programs from each university to ensure diversity
+        diverse_sample = []
+        for university, programs in programs_by_uni.items():
+            # Take up to 2 programs per university
+            diverse_sample.extend(programs[:2])
+
+        # Limit total to reasonable number for exploratory overview
+        return diverse_sample[:15]

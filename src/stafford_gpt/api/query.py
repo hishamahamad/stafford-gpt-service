@@ -69,7 +69,7 @@ def create_query_router(orchestrator: OrchestratorService) -> APIRouter:
                 program_type=data["program_type"],
                 program_name=data["program_name"],
                 basic_info=data.get("basic_info"),
-                program_overview=data.get("program_overview"),
+                learning_outcomes=data.get("learning_outcomes"),
                 program_benefits=data.get("program_benefits"),
                 duration=data.get("duration"),
                 fees=data.get("fees"),

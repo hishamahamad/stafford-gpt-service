@@ -33,6 +33,7 @@ class ExtractedEntities:
     universities: List[str] = None       # hull, enu, birmingham-city
     programs: List[str] = None           # mba, msc-data-science, etc.
     program_names: List[str] = None      # executive-mba, general-mba, finance-mba, etc.
+    specializations: List[str] = None    # banking, finance, marketing, etc.
     budget_max: float = None
     budget_min: float = None
     duration_preference: int = None      # in months
@@ -47,7 +48,7 @@ class QueryParser:
         # University keywords mapping
         self.university_keywords = {
             'hull': ['hull', 'university of hull'],
-            'enu': ['enu', 'edinburgh napier', 'napier', 'edinburgh'],
+            'napier': ['enu', 'edinburgh napier', 'napier', 'edinburgh', 'edinburgh napier university'],
             'northampton': ['northampton', 'university of northampton'],
             'leicester': ['leicester', 'university of leicester', 'leics'],
             'dundee': ['dundee', 'university of dundee'],
@@ -69,6 +70,7 @@ class QueryParser:
         # Specialization keywords
         self.specialization_keywords = {
             'finance': ['finance', 'financial', 'banking', 'investment'],
+            'banking': ['banking', 'bank', 'financial services'],
             'marketing': ['marketing', 'digital marketing', 'brand'],
             'hr': ['hr', 'human resources', 'people management'],
             'healthcare': ['healthcare', 'medical', 'health management'],
@@ -100,6 +102,7 @@ class QueryParser:
         # Extract entities
         entities.universities = self._extract_universities(query_lower)
         entities.programs = self._extract_programs(query_lower)
+        entities.specializations = self._extract_specializations(query_lower)
         entities.budget_max, entities.budget_min = self._extract_budget(query_lower)
         entities.duration_preference = self._extract_duration(query_lower)
         entities.fields_of_interest = self._extract_fields(query_lower)
@@ -193,6 +196,14 @@ class QueryParser:
                 found_fields.append(field)
         return found_fields if found_fields else ["overview"]  # Default to overview
 
+    def _extract_specializations(self, query: str) -> List[str]:
+        """Extract specialization slugs from query."""
+        found_specializations = []
+        for slug, keywords in self.specialization_keywords.items():
+            if any(keyword in query for keyword in keywords):
+                found_specializations.append(slug)
+        return found_specializations if found_specializations else None
+
 
 class ScopeBuilder:
     """Build scope objects compatible with existing Stafford GPT architecture."""
@@ -246,9 +257,9 @@ class PromptsService:
     def __init__(self):
         try:
             self.llm = ChatOpenAI(
-                model_name=settings.chat_model,
+                model=settings.chat_model,
                 temperature=settings.temperature,
-                openai_api_key=settings.openai_api_key
+                api_key=settings.openai_api_key
             )
             self.llm_available = True
         except Exception as e:
@@ -262,6 +273,35 @@ class PromptsService:
     def classify_scope(self, question: str, history: str = "") -> Dict[str, Any]:
         """Scope classification using intelligent query parsing with better follow-up handling."""
 
+        # Check for broad exploratory queries first
+        question_lower = question.lower()
+        broad_query_indicators = [
+            'tell me about your mba programs',
+            'what mba programs',
+            'all mba programs',
+            'mba programs you offer',
+            'tell me about your msc programs',
+            'what msc programs',
+            'all msc programs',
+            'msc programs you offer',
+            'what programs does',
+            'all programs from',
+            'programs available at',
+            'what programs do you have',
+            'show me all programs',
+            'list of programs'
+        ]
+
+        # Force exploratory mode for broad queries
+        if any(indicator in question_lower for indicator in broad_query_indicators):
+            # Parse for university/program entities but keep exploratory mode
+            intent, entities = self.query_parser.parse_query(question)
+            scope = self.scope_builder.build_scope(intent, entities)
+            scope["mode"] = "exploratory"  # Force exploratory mode
+            scope["confidence"] = 0.95
+            scope["parsing_method"] = "broad_query_detection"
+            return scope
+
         # First, try intelligent parsing
         intent, entities = self.query_parser.parse_query(question)
         scope = self.scope_builder.build_scope(intent, entities)
@@ -272,16 +312,53 @@ class PromptsService:
             scope["parsing_method"] = "intelligent"
             return scope
 
-        # For follow-up questions, pluck out specific university/program context from history
+        # Enhanced context handling for follow-up questions
         if history and not entities.universities and not entities.programs:
             # Extract entities from conversation history to maintain context
             history_intent, history_entities = self.query_parser.parse_query(history)
-            if history_entities.universities or history_entities.programs:
-                # Use history context for follow-up questions
-                scope = self.scope_builder.build_scope(intent, history_entities)
+
+            # Also look for university/program mentions in the full conversation history
+            history_lower = history.lower()
+
+            # Check for university mentions in history
+            context_universities = []
+            for slug, keywords in self.query_parser.university_keywords.items():
+                if any(keyword in history_lower for keyword in keywords):
+                    context_universities.append(slug)
+
+            # Check for program mentions in history
+            context_programs = []
+            for slug, keywords in self.query_parser.program_keywords.items():
+                if any(keyword in history_lower for keyword in keywords):
+                    context_programs.append(slug)
+
+            # Check for specialization mentions in history
+            context_specializations = []
+            for slug, keywords in self.query_parser.specialization_keywords.items():
+                if any(keyword in history_lower for keyword in keywords):
+                    context_specializations.append(slug)
+
+            # If we found context from history, use it
+            if context_universities or context_programs or context_specializations or history_entities.universities or history_entities.programs or history_entities.specializations:
+                # Merge current intent with historical context
+                merged_entities = ExtractedEntities()
+                merged_entities.universities = entities.universities or history_entities.universities or context_universities
+                merged_entities.programs = entities.programs or history_entities.programs or context_programs
+                merged_entities.specializations = entities.specializations or history_entities.specializations or context_specializations
+                merged_entities.fields_of_interest = entities.fields_of_interest
+                merged_entities.budget_max = entities.budget_max
+                merged_entities.budget_min = entities.budget_min
+                merged_entities.duration_preference = entities.duration_preference
+
+                scope = self.scope_builder.build_scope(intent, merged_entities)
                 scope["mode"] = "specific"  # Maintain specific mode for follow-ups
-                scope["confidence"] = 0.8
-                scope["parsing_method"] = "history_context"
+                scope["confidence"] = 0.85
+                scope["parsing_method"] = "enhanced_history_context"
+
+                # Add specialization context to scope
+                if merged_entities.specializations:
+                    scope["specializations"] = merged_entities.specializations
+
                 return scope
 
         # If LLM is not available, return the scope we have
@@ -305,13 +382,11 @@ class PromptsService:
             }}
             
             Rules:
-            - hull = University of Hull
-            - enu = Edinburgh Napier University  
-            - birmingham-city = Birmingham City University
             - If user names uni/program OR if history shows they were discussing a specific uni/program, it's "specific"
             - If they ask for alternatives without prior context, it's "exploratory"
             - If they say "vs" or "compare", it's "compare"
             - For follow-up questions (like "what are the modules?", "how much?"), check history for context
+            - Pay special attention to university mentions in the conversation history
             
             History: {history}
             Current Question: {question}
@@ -394,19 +469,44 @@ class PromptsService:
             basic_info = json.loads(row.get('basic_info', '{}')) if isinstance(row.get('basic_info'), str) else row.get('basic_info', {})
             duration_info = json.loads(row.get('duration', '{}')) if isinstance(row.get('duration'), str) else row.get('duration', {})
             fees_info = json.loads(row.get('fees', '{}')) if isinstance(row.get('fees'), str) else row.get('fees', {})
+            curriculum_info = json.loads(row.get('curriculum', '{}')) if isinstance(row.get('curriculum'), str) else row.get('curriculum', {})
+            learning_outcomes_info = json.loads(row.get('learning_outcomes', '[]')) if isinstance(row.get('learning_outcomes'), str) else row.get('learning_outcomes', [])
 
             # Build fields from canonical data
             fields = {}
 
-            # Fees information
+            # Fees information - prioritize discounted fees and mention Stafford Grant
             if fees_info:
                 currency_symbol = "$" if fees_info.get('currency') == 'USD' else "£"
-                total_fee = fees_info.get('total_fee', fees_info.get('discounted_total_fee'))
-                if total_fee:
+
+                # Prioritize discounted fees over total fees
+                discounted_fee = fees_info.get('discounted_total_fee')
+                total_fee = fees_info.get('total_fee')
+                discounted_instalment = fees_info.get('discounted_instalment_fee')
+                regular_instalment = fees_info.get('instalment_fee')
+
+                if discounted_fee and total_fee and discounted_fee != total_fee:
+                    # Show discounted fee as primary with Stafford Grant mention
+                    stafford_grant = total_fee - discounted_fee
+                    display_fee = discounted_fee
+                    instalment_fee = discounted_instalment or regular_instalment
+
+                    notes = f"Discounted program fee (includes Stafford Grant of {currency_symbol}{stafford_grant:,.0f})"
+                    if instalment_fee:
+                        notes += f". Installments: {currency_symbol}{instalment_fee:.0f} per {fees_info.get('instalment_period', 1)} month(s)"
+                else:
+                    # Fall back to total fee
+                    display_fee = total_fee
+                    instalment_fee = regular_instalment
+                    notes = "Total program fee"
+                    if instalment_fee:
+                        notes += f". Installments: {currency_symbol}{instalment_fee:.0f} per {fees_info.get('instalment_period', 1)} month(s)"
+
+                if display_fee:
                     fields['fees'] = {
-                        'value': f"{currency_symbol}{total_fee:,.0f}",
+                        'value': f"{currency_symbol}{display_fee:,.0f}",
                         'currency': fees_info.get('currency', 'USD'),
-                        'notes': f"Total program fee. Installments: {currency_symbol}{fees_info.get('instalment_fee', 0):.0f} per {fees_info.get('instalment_period', 1)} month(s)" if fees_info.get('instalment_fee') else "",
+                        'notes': notes,
                         'evidence': []
                     }
 
@@ -427,13 +527,96 @@ class PromptsService:
                         'evidence': []
                     }
 
+            # Curriculum/Modules information - THE MISSING PIECE!
+            if curriculum_info:
+                modules_data = []
+
+                # Add core modules
+                core_modules = curriculum_info.get('core_modules', [])
+                if core_modules:
+                    modules_data.append("**Core Modules:**")
+                    for module in core_modules:
+                        module_name = module.get('module_name', 'Unknown Module')
+                        module_desc = module.get('description', 'No description available')
+                        modules_data.append(f"• **{module_name}**: {module_desc[:200]}{'...' if len(module_desc) > 200 else ''}")
+
+                # Add optional/specialization modules - DYNAMIC LABELING
+                optional_modules = curriculum_info.get('optional_modules', [])
+                if optional_modules:
+                    # Determine specialization name dynamically from scope or program data
+                    specialization_name = "Specialization"  # Default fallback
+
+                    # Try to get specialization from scope first
+                    if scope and scope.get('specializations'):
+                        spec_slug = scope['specializations'][0]  # Take first specialization
+                        # Convert slug to readable name
+                        specialization_mapping = {
+                            'banking': 'Banking',
+                            'finance': 'Finance',
+                            'marketing': 'Marketing',
+                            'hr': 'Human Resources',
+                            'healthcare': 'Healthcare',
+                            'it': 'Information Technology',
+                            'supply_chain': 'Supply Chain',
+                            'project_management': 'Project Management',
+                            'data_analytics': 'Data Analytics',
+                            'leadership': 'Leadership',
+                            'executive': 'Executive'
+                        }
+                        specialization_name = specialization_mapping.get(spec_slug, specialization_name)
+
+                    # Alternatively, try to infer from program name
+                    elif basic_info.get('program_name', '').lower():
+                        program_name_lower = basic_info['program_name'].lower()
+                        if 'banking' in program_name_lower:
+                            specialization_name = 'Banking'
+                        elif 'finance' in program_name_lower:
+                            specialization_name = 'Finance'
+                        elif 'marketing' in program_name_lower:
+                            specialization_name = 'Marketing'
+                        elif 'hr' in program_name_lower or 'human resources' in program_name_lower:
+                            specialization_name = 'Human Resources'
+                        # Add more as needed
+
+                    modules_data.append(f"\n**{specialization_name} Specialization Modules:**")
+                    for module in optional_modules:
+                        module_name = module.get('module_name', 'Unknown Module')
+                        module_desc = module.get('description', 'No description available')
+                        modules_data.append(f"• **{module_name}**: {module_desc[:200]}{'...' if len(module_desc) > 200 else ''}")
+
+                # Add dissertation/project
+                dissertation = curriculum_info.get('dissertation_project')
+                if dissertation and dissertation.get('required'):
+                    modules_data.append(f"\n**{dissertation.get('name', 'Final Project')}**: Required capstone project")
+
+                if modules_data:
+                    fields['modules'] = {
+                        'value': '\n'.join(modules_data),
+                        'evidence': []
+                    }
+
+            # Learning outcomes
+            if learning_outcomes_info:
+                outcomes_text = "Upon completion, students will be able to:\n" + '\n'.join([f"• {outcome}" for outcome in learning_outcomes_info[:8]])  # Limit to 8 outcomes
+                fields['learning_outcomes'] = {
+                    'value': outcomes_text,
+                    'evidence': []
+                }
+
             # Program overview
             program_name = basic_info.get('program_name', 'Unknown Program')
             university_name = basic_info.get('university_name', 'Unknown University')
             program_type = basic_info.get('program_type', row.get('program_type', 'Unknown'))
+            program_overview = basic_info.get('program_overview', '')
+
+            # Use the detailed program overview if available, otherwise use basic description
+            if program_overview:
+                overview_text = program_overview
+            else:
+                overview_text = f"The {program_name} is a {program_type.lower()} program offered by {university_name} through Stafford Global."
 
             fields['overview'] = {
-                'value': f"The {program_name} is a {program_type.lower()} program offered by {university_name} through Stafford Global.",
+                'value': overview_text,
                 'evidence': []
             }
 
@@ -655,7 +838,7 @@ class PromptsService:
         grounded_json: Dict[str, Any],
         history: str = ""
     ) -> str:
-        """Enhanced answer rendering with highly detailed responses."""
+        """Enhanced answer rendering with intelligent intent-based responses."""
 
         # If LLM is not available, provide a basic response
         if not self.llm_available or not self.llm:
@@ -675,39 +858,97 @@ class PromptsService:
         has_budget_filter = any(item.get('meets_budget') is not None for item in grounded_json.get('items', []))
         has_duration_filter = any(item.get('meets_duration') is not None for item in grounded_json.get('items', []))
 
-        prompt_text = f"""
-        Task: Provide a comprehensive but concise answer from the grounded_json data. Keep response under 300 words.
-        
-        RESPONSE REQUIREMENTS:
-        - Include key information: fees, duration, intakes, modules, requirements
-        - For fees: Include payment options and currency
-        - For duration: Include study options and flexibility
-        - For intakes: Include key dates and application process
-        - Use engaging, professional tone
-        - Focus on most relevant details for the question
-        
-        Response Structure:
-        - SPECIFIC MODE: Program overview, key details, fees, intakes, next steps
-        - EXPLORATORY MODE: Compare top programs with key differentiators
-        - COMPARE MODE: Side-by-side analysis with clear recommendations
-        
-        IMPORTANT: 
-        - Be concise but informative
-        - Use specific numbers and dates when available
-        - Explain why details matter to students
-        - If limited info, focus on what IS available
-        
-        Budget filtering applied: {has_budget_filter}
-        Duration filtering applied: {has_duration_filter}
-        
-        Conversation History: {history}
-        Current Question: {question}
-        Grounded Data: {json.dumps(grounded_json, indent=2)}
-        """
+        # Get the mode to adjust response style
+        mode = grounded_json.get('mode', 'specific')
+
+        # Use intelligent intent discovery for specific mode
+        if mode == 'exploratory':
+            prompt_text = f"""
+            Task: Provide a high-level overview of ONLY the programs found in the data. Keep response under 250 words.
+            
+            EXPLORATORY MODE REQUIREMENTS:
+            - ONLY mention programs that actually exist in the provided data
+            - If no programs are found, clearly state that no programs are available for that type
+            - Group programs by type based on what's actually available in the data
+            - Mention only the universities that have programs in the provided data
+            - DO NOT invent, assume, or mention programs not in the data
+            - Use engaging, professional tone that encourages further exploration
+            - If data is empty or insufficient, say so honestly in a natural, conversational way
+            
+            CRITICAL RULES:
+            - NEVER mention program types that don't exist in the data
+            - NEVER mention universities that don't have programs in the data
+            - If no relevant programs found, suggest contacting for more information in a friendly, natural tone
+            - Base response ENTIRELY on the provided data
+            - Keep language conversational and helpful, not overly formal
+            - DO NOT mention technical terms like "data", "system", "database", or "available in our data"
+            - Speak as if you're a knowledgeable education consultant, not a technical system
+            - Frame missing programs as "we don't currently offer" rather than "not available in the data"
+            
+            Current Question: {question}
+            Available Programs Data: {json.dumps(grounded_json, indent=2)}
+            """
+
+            system_message = "You are Stafford Global's education consultant. Provide high-level program overviews for exploratory queries. Focus on breadth of offerings and encourage further specific inquiries."
+        else:
+            # For specific mode, use intelligent intent discovery with specialization context
+            prompt_text = f"""
+            Task: Understand what the user is specifically asking about and provide a focused, relevant answer.
+            
+            INTENT-BASED RESPONSE APPROACH:
+            1. First, analyze the user's question to understand their specific intent
+            2. Look at the available data and identify what information is relevant to their question
+            3. Check the conversation history for specialization context (e.g., if they previously asked about Banking)
+            4. Provide a direct, focused answer that addresses their specific need
+            5. Only include information that's directly relevant to what they asked
+            6. If they ask about something not available in the data, acknowledge this clearly
+            
+            SPECIALIZATION CONTEXT HANDLING:
+            - If the conversation history shows the user was interested in a specific specialization (e.g., Banking, Marketing, Finance), 
+              prioritize programs with that specialization in your response
+            - When user asks general questions like "tell me about the Global Hybrid MBA option" after previously discussing Banking,
+              focus specifically on the Global Hybrid MBA Banking option, not all Global Hybrid MBA programs
+            - Maintain the specialization context from previous exchanges unless user explicitly asks for something different
+            
+            RESPONSE GUIDELINES:
+            - Be conversational and helpful, like a knowledgeable education consultant
+            - Answer the specific question being asked - don't dump all available information
+            - ONLY include fees/costs if user specifically asks about pricing, costs, fees, or affordability
+            - ONLY include duration/timeline if user specifically asks about time, duration, or how long
+            - ONLY include specific intake dates if user specifically asks about start dates or when programs begin
+            - For general program inquiries, focus on program types, specializations, and general overview
+            - Keep responses under 250 words and well-structured
+            - Use specific data from the grounded information when available
+            - If information is missing, suggest next steps or how to get more details
+            
+            CRITICAL RESTRICTIONS:
+            - DO NOT mention specific fees, costs, or pricing unless explicitly asked
+            - DO NOT mention specific durations, months, or timeframes unless explicitly asked  
+            - DO NOT mention specific intake dates unless explicitly asked
+            - DO NOT include payment installment details unless explicitly asked
+            - Focus on program content, types, and academic aspects for general queries
+            
+            IMPORTANT:
+            - Don't assume what the user wants beyond what they asked
+            - Don't include unrelated information just because it's available
+            - Be honest about what information is and isn't available
+            - Focus on being helpful rather than comprehensive
+            - Maintain a professional but approachable tone
+            - Pay special attention to specialization context from conversation history
+            
+            Conversation History: {history}
+            User's Question: {question}
+            Available Program Data: {json.dumps(grounded_json, indent=2)}
+            
+            Budget filtering applied: {has_budget_filter}
+            Duration filtering applied: {has_duration_filter}
+            """
+
+            system_message = "You are Stafford Global's education consultant. Analyze user questions carefully and provide focused, intent-driven responses. Only include information that directly addresses what the user is asking about. Pay special attention to specialization context from conversation history. Be helpful, conversational, and honest about available information."
 
         try:
             messages = [
-                SystemMessage(content="You are Stafford Global's education consultant. Provide comprehensive but concise program guidance. Keep responses under 300 words while being thorough and professional."),
+                SystemMessage(content=system_message),
                 HumanMessage(content=prompt_text)
             ]
 

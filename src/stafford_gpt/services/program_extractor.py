@@ -25,9 +25,9 @@ class ProgramDataExtractor:
 
     def __init__(self):
         self.llm = ChatOpenAI(
-            model_name=settings.chat_model,
+            model=settings.chat_model,
             temperature=0.1,  # Low temperature for factual extraction
-            openai_api_key=settings.openai_api_key
+            api_key=settings.openai_api_key
         )
 
     async def extract_program_data(self, url: str, university_id: str, degree_type: str) -> Dict[str, Any]:
@@ -47,7 +47,6 @@ class ProgramDataExtractor:
         program_info = extract_program_info_from_url(url)
         program_type = program_info['program_type']
         program_slug = program_info['program_slug']
-        program_type_name = program_info['program_type_name']
 
         if not program_type or not program_slug:
             raise ValueError(f"Could not extract program information from URL: {url}")
@@ -85,6 +84,8 @@ class ProgramDataExtractor:
     ) -> Dict[str, Any]:
         """Use AI to extract structured program data from webpage content."""
 
+        print(f"Content length: {len(content):,} characters")
+
         university_name = get_university_name(university_id)
         program_type_name = get_program_type_name(program_type)
         degree_type_name = get_degree_type_name(degree_type)
@@ -120,12 +121,13 @@ Return ONLY valid JSON following this structure:
   "basic_info": {{
     "program_name": "extract specific specialization/variant name from content or null",
     "program_type": "{program_type_name}",
+    "program_overview": "Overview of the program, MUST BE AT LEAST 200 words, DO NOT GENERATE CONTENT, USE THE CONTENT FROM THE OVERVIEW SECTION ONLY, never null",
     "degree_type": "{degree_type_name}",
     "university_name": "{university_name}",
     "university_location": "UK",
   }},
-  "program_overview": "Unaltered summary of the program, never null",
-  "program_benefits": ["array of benefits or null"],
+  "learning_outcomes": ["array of learning outcomes extracted from content or null"],
+  "program_benefits": ["array of benefits extracted from content or null"],
   "duration": {{
     "months": "integer months or null",
     "delivery_mode": "online|online+workshop or null",
@@ -138,10 +140,10 @@ Return ONLY valid JSON following this structure:
   "fees": {{
     "currency": "GBP|USD|EUR or null",
     "total_fee": "number, before any discounts. If discount exists, total_fee and discounted_fee will never be the same. Never null and must not match discounted_total_fee.",
-    "instalment_fee": "Obtained by dividing total_fee by number of instalment periods. Never null and must not match discounted_instalment_fee.",
+    "instalment_fee": "Obtained by dividing total_fee by number of instalment periods. Never null and must not match discounted_instalment_fee. Round up to the nearest whole number.",
     "instalment_period": "period in months or null. If "Paid Monthly" is mentioned, the period is 1",
     "discounted_total_fee": "Discounted total course fee, usually also called early bird or launch fee. If no discounts, then null",
-    "discounted_instalment_fee": "If discounted fee is available, obtain by dividing discounted_total_fee by number of instalment periods"
+    "discounted_instalment_fee": "If discounted fee is available, obtain by dividing discounted_total_fee by number of instalment periods. Round up to the nearest whole number."
   }},
   "intake_info": {{
     "next_intake": "next intake if mentioned or null",
@@ -184,10 +186,16 @@ Return ONLY valid JSON following this structure:
       {{
         "module_name": "exact name",
         "credits": "number or null",
-        "description": "full description of the module"
+        "description": "full description of the module, NO DETAIL MUST BE SKIPPED"
       }}
     ],
-    "optional_modules": ["array or null"],
+    "optional_modules": [
+      {{
+        "module_name": "exact name",
+        "credits": "number or null",
+        "description": "full description of the module if available or null"
+      }}
+    ],
     "dissertation_project": {{
       "required": true|false|null,
       "name": "project name or null",
@@ -215,15 +223,15 @@ Return ONLY valid JSON following this structure:
     "notable_alumni_companies": ["array if mentioned or null"]
   }},
   "academic_progression": {{
-    further_study_options: ["List specific programs or qualifications that graduates of this program are eligible to pursue, or null if not mentioned"],
-    credit_transfer_options: true|false|null
-    articulation_agreements: ["List of articulation agreements or null"]
-  }}
+    "further_study_options": ["List specific programs or qualifications that graduates of this program are eligible to pursue, or null if not mentioned"],
+    "credit_transfer_options": true|false|null,
+    "articulation_agreements": ["List of articulation agreements or null"]
+  }},
   "geographic_focus": {{
     "target_regions": ["array of regions or null"],
     "local_relevance": true|false|null,
     "international_focus": true|false|null,
-    "study_locations": ["array of locations or null"]
+    "study_locations": ["array of locations or null. Online is not a location"]
   }},
   "completion_rates": {{
     "overall_completion_rate": "percentage or null",
@@ -233,7 +241,7 @@ Return ONLY valid JSON following this structure:
 }}
 
 WEBPAGE CONTENT:
-{content[:40000]}  # Limit content to avoid token limits
+{content[:200000]}
 """
 
         messages = [
@@ -243,10 +251,10 @@ WEBPAGE CONTENT:
 
         response = self.llm.invoke(messages)
 
-        # Clean the response content to handle markdown code blocks
+        # Clean the response content to handle Markdown code blocks
         response_content = response.content.strip()
 
-        # Remove markdown code block syntax if present
+        # Remove Markdown code block syntax if present
         if response_content.startswith('```json'):
             response_content = response_content[7:]  # Remove '```json'
         elif response_content.startswith('```'):

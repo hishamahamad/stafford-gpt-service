@@ -9,7 +9,10 @@ from pydantic import BaseModel
 class BasicInfo(BaseModel):
     program_name: str
     program_type: Optional[str] = None
+    program_overview: str
     university_name: str
+    university_location: str
+    degree_type: Optional[str] = None
 
 
 class Duration(BaseModel):
@@ -208,7 +211,7 @@ class ProgramDataRequest(BaseModel):
 
     # Comprehensive nested data (all optional for gradual adoption)
     basic_info: BasicInfo
-    program_overview: str
+    learning_outcomes: Optional[List[str]] = None
     program_benefits: Optional[List[str]] = None
     duration: Duration
     fees: Optional[Fees] = None
@@ -273,7 +276,7 @@ class ProgramDetailsResponse(BaseModel):
     program_type: str
     program_name: str
     basic_info: Optional[Dict[str, Any]] = None
-    program_overview: str
+    learning_outcomes: Optional[List[str]] = None
     program_benefits: Optional[List[str]] = None
     duration: Optional[Dict[str, Any]] = None
     fees: Optional[Dict[str, Any]] = None
@@ -294,4 +297,3 @@ class AllProgramsResponse(BaseModel):
     programs: List[ProgramDetailsResponse]
     total_count: int
     status: str = "success"
-

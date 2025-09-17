@@ -23,9 +23,14 @@ class DataAccessService:
         if scope.get("universities"):
             university_ids = [u.get("slug") for u in scope["universities"] if u.get("slug")]
             if university_ids:
-                placeholders = ",".join(["%s"] * len(university_ids))
-                where_conditions.append(f"u.id IN ({placeholders})")
-                params.extend(university_ids)
+                # Use more flexible matching for university IDs
+                university_conditions = []
+                for uni_id in university_ids:
+                    # Try exact match first, then partial match
+                    university_conditions.append("(u.id = %s OR u.id LIKE %s OR LOWER(u.name) LIKE %s)")
+                    params.extend([uni_id, f"%{uni_id}%", f"%{uni_id.replace('-', ' ')}%"])
+
+                where_conditions.append(f"({' OR '.join(university_conditions)})")
 
         # Filter by programs if specified
         if scope.get("programs"):
@@ -34,12 +39,68 @@ class DataAccessService:
                 # Create conditions to match program_type - handle variations like 'mba' matching 'online-mba'
                 program_conditions = []
                 for identifier in program_identifiers:
-                    program_conditions.append("p.program_type LIKE %s")
-                    params.append(f"%{identifier}%")
+                    # Handle common variations
+                    if identifier == 'mba':
+                        program_conditions.append("(p.program_type LIKE %s OR p.program_type LIKE %s OR p.program_type LIKE %s)")
+                        params.extend(["%mba%", "%MBA%", "%business%"])
+                    elif identifier == 'msc-data-science':
+                        program_conditions.append("(p.program_type LIKE %s OR p.program_type LIKE %s)")
+                        params.extend(["%data%", "%analytics%"])
+                    elif identifier == 'msc-cybersecurity':
+                        program_conditions.append("(p.program_type LIKE %s OR p.program_type LIKE %s)")
+                        params.extend(["%cyber%", "%security%"])
+                    else:
+                        program_conditions.append("p.program_type LIKE %s")
+                        params.append(f"%{identifier}%")
+
                 where_conditions.append(f"({' OR '.join(program_conditions)})")
 
+        # Filter by specializations if specified in scope
+        if scope.get("specializations"):
+            specialization_conditions = []
+            for specialization in scope["specializations"]:
+                if specialization == 'finance':
+                    # Match banking, finance, financial programs
+                    specialization_conditions.append("(p.program_name LIKE %s OR p.program_name LIKE %s OR p.program_name LIKE %s OR p.program_type LIKE %s OR p.program_type LIKE %s)")
+                    params.extend(["%banking%", "%finance%", "%financial%", "%banking%", "%finance%"])
+                elif specialization == 'marketing':
+                    specialization_conditions.append("(p.program_name LIKE %s OR p.program_type LIKE %s)")
+                    params.extend(["%marketing%", "%marketing%"])
+                elif specialization == 'hr':
+                    specialization_conditions.append("(p.program_name LIKE %s OR p.program_type LIKE %s OR p.program_name LIKE %s)")
+                    params.extend(["%human resources%", "%hr%", "%people%"])
+                elif specialization == 'healthcare':
+                    specialization_conditions.append("(p.program_name LIKE %s OR p.program_type LIKE %s)")
+                    params.extend(["%healthcare%", "%health%"])
+                elif specialization == 'it':
+                    specialization_conditions.append("(p.program_name LIKE %s OR p.program_type LIKE %s OR p.program_name LIKE %s)")
+                    params.extend(["%information technology%", "%digital%", "%it%"])
+                elif specialization == 'supply_chain':
+                    specialization_conditions.append("(p.program_name LIKE %s OR p.program_type LIKE %s)")
+                    params.extend(["%supply chain%", "%logistics%"])
+                elif specialization == 'banking':
+                    # Handle banking specialization specifically
+                    specialization_conditions.append("(p.program_name LIKE %s OR p.program_type LIKE %s OR p.program_name LIKE %s)")
+                    params.extend(["%banking%", "%bank%", "%finance%"])
+                elif specialization == 'project_management':
+                    specialization_conditions.append("(p.program_name LIKE %s OR p.program_type LIKE %s)")
+                    params.extend(["%project management%", "%project%"])
+                elif specialization == 'data_analytics':
+                    specialization_conditions.append("(p.program_name LIKE %s OR p.program_type LIKE %s)")
+                    params.extend(["%analytics%", "%data%"])
+                elif specialization == 'leadership':
+                    specialization_conditions.append("(p.program_name LIKE %s OR p.program_type LIKE %s)")
+                    params.extend(["%leadership%", "%management%"])
+                elif specialization == 'executive':
+                    specialization_conditions.append("(p.program_name LIKE %s OR p.program_type LIKE %s)")
+                    params.extend(["%executive%", "%exec%"])
+
+            if specialization_conditions:
+                where_conditions.append(f"({' OR '.join(specialization_conditions)})")
+
+        # Fixed SQL query - include ORDER BY column in SELECT when using DISTINCT
         query = f"""
-            SELECT pv.program_variant_id
+            SELECT DISTINCT pv.program_variant_id, pv.created_at
             FROM program_variants pv
             JOIN universities u ON pv.university_id = u.id
             JOIN programs p ON pv.program_id = p.id
@@ -50,8 +111,18 @@ class DataAccessService:
         try:
             cur.execute(query, params)
             results = cur.fetchall()
-            return [row[0] for row in results]
+            # Extract just the program_variant_id from the results
+            program_variant_ids = [row[0] for row in results]
+
+            # Debug logging
+            print(f"Scope: {scope}")
+            print(f"Query: {query}")
+            print(f"Params: {params}")
+            print(f"Found {len(program_variant_ids)} program variants")
+
+            return program_variant_ids
         except Exception as e:
+            print(f"Error in resolve_program_variants: {e}")
             return []
         finally:
             cur.close()
@@ -72,7 +143,7 @@ class DataAccessService:
                 p.program_type as program_type,
                 p.program_name as program_name,
                 pv.basic_info,
-                pv.program_overview,
+                pv.learning_outcomes,
                 pv.program_benefits,
                 pv.duration,
                 pv.fees,
@@ -189,7 +260,6 @@ class DataAccessService:
             program_type = program_data['program_type']
 
             basic_info = program_data['basic_info']
-            duration = program_data['duration']
 
             # Ensure university exists
             cur.execute(
@@ -208,22 +278,22 @@ class DataAccessService:
                        (university_id, basic_info['program_name']))
             program_id = cur.fetchone()[0]
 
-            # Insert or update comprehensive program variant
+            # Upsert program data
             upsert_query = """
                 INSERT INTO program_variants (
                     program_variant_id, university_id, program_id, url,
-                    basic_info, program_overview, program_benefits,duration, fees, intake_info,
+                    basic_info, learning_outcomes, program_benefits, duration, fees, intake_info,
                     entry_requirements, accreditation, curriculum, assessment,
                     support_services, career_outcomes,
                     academic_progression, faculty, testimonials, geographic_focus,
-                    technology_platform, completion_rates, academic_progression, contact_info, metadata
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    technology_platform, completion_rates, contact_info, metadata
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (program_variant_id) DO UPDATE SET
                     university_id = EXCLUDED.university_id,
                     program_id = EXCLUDED.program_id,
                     url = EXCLUDED.url,
                     basic_info = EXCLUDED.basic_info,
-                    program_overview = EXCLUDED.program_overview,
+                    learning_outcomes = EXCLUDED.learning_outcomes,
                     program_benefits = EXCLUDED.program_benefits,
                     duration = EXCLUDED.duration,
                     fees = EXCLUDED.fees,
@@ -240,7 +310,6 @@ class DataAccessService:
                     geographic_focus = EXCLUDED.geographic_focus,
                     technology_platform = EXCLUDED.technology_platform,
                     completion_rates = EXCLUDED.completion_rates,
-                    academic_progression = EXCLUDED.academic_progression,
                     contact_info = EXCLUDED.contact_info,
                     metadata = EXCLUDED.metadata,
                     updated_at = CURRENT_TIMESTAMP
@@ -252,9 +321,9 @@ class DataAccessService:
                 program_id,
                 program_data.get('url'),
                 json.dumps(basic_info),
-                json.dumps(duration),
-                json.dumps(program_data.get('program_overview')),
+                json.dumps(program_data.get('learning_outcomes')),
                 json.dumps(program_data.get('program_benefits')),
+                json.dumps(program_data.get('duration')),
                 json.dumps(program_data.get('fees')),
                 json.dumps(program_data.get('intake_info')),
                 json.dumps(program_data.get('entry_requirements')),
@@ -267,7 +336,6 @@ class DataAccessService:
                 json.dumps(program_data.get('faculty')),
                 json.dumps(program_data.get('testimonials')),
                 json.dumps(program_data.get('geographic_focus')),
-                json.dumps(program_data.get('academic_progression')),
                 json.dumps(program_data.get('technology_platform')),
                 json.dumps(program_data.get('completion_rates')),
                 json.dumps(program_data.get('contact_info')),

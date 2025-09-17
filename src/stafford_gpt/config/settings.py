@@ -5,7 +5,7 @@ from pydantic_settings import BaseSettings
 class Settings(BaseSettings):
     # OpenAI Configuration
     openai_api_key: str
-    chat_model: str = "gpt-4o"
+    chat_model: str = "gpt-4o"  # Revert back to gpt-4o
     temperature: float = 0.1
 
     # Database Configuration
