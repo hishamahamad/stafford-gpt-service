@@ -1,258 +1,19 @@
 """
-Query processing service that combines NLP intent classification with structured SQL queries.
-Integrates with the existing Stafford GPT architecture while adding intelligent query parsing.
+Simplified prompts service for the Stafford Global GPT system.
+Contains only the essential functionality used by the orchestrator.
 """
 
 import json
 import re
-from typing import List, Dict, Any, Optional, Tuple
-from dataclasses import dataclass
-from enum import Enum
+from typing import Dict, List, Any
 from langchain_openai import ChatOpenAI
 from langchain.schema import HumanMessage, SystemMessage
 
 from ..config.settings import settings
 
 
-class QueryIntent(Enum):
-    """Types of queries users might ask about Stafford Global programs."""
-    FIND_PROGRAM = "find_program"        # Find programs matching criteria
-    COMPARE_PROGRAMS = "compare"         # Compare specific programs
-    PROGRAM_DETAILS = "details"          # Get specific program information
-    COST_INQUIRY = "cost"               # Questions about fees and payment
-    DURATION_INQUIRY = "duration"        # Questions about program length
-    ELIGIBILITY_CHECK = "eligibility"    # Check if user qualifies
-    INTAKE_INQUIRY = "intake"           # Questions about start dates
-    MODULES_INQUIRY = "modules"         # Questions about curriculum
-    OVERVIEW_INQUIRY = "overview"       # General program overview
-
-
-@dataclass
-class ExtractedEntities:
-    """Entities extracted from user query."""
-    universities: List[str] = None       # hull, enu, birmingham-city
-    programs: List[str] = None           # mba, msc-data-science, etc.
-    program_names: List[str] = None      # executive-mba, general-mba, finance-mba, etc.
-    specializations: List[str] = None    # banking, finance, marketing, etc.
-    budget_max: float = None
-    budget_min: float = None
-    duration_preference: int = None      # in months
-    currency: str = "GBP"
-    fields_of_interest: List[str] = None # fees, modules, duration, intakes
-
-
-class QueryParser:
-    """Parse natural language queries into structured components for Stafford Global programs."""
-
-    def __init__(self):
-        # University keywords mapping
-        self.university_keywords = {
-            'hull': ['hull', 'university of hull'],
-            'napier': ['enu', 'edinburgh napier', 'napier', 'edinburgh', 'edinburgh napier university'],
-            'northampton': ['northampton', 'university of northampton'],
-            'leicester': ['leicester', 'university of leicester', 'leics'],
-            'dundee': ['dundee', 'university of dundee'],
-            'nottingham': ['nottingham', 'university of nottingham', 'notts'],
-            'derby': ['derby', 'university of derby'],
-            'kings': ['kings', 'king\'s college london', 'kcl']
-        }
-
-        # Program keywords mapping
-        self.program_keywords = {
-            'mba': ['mba', 'master of business administration', 'business administration'],
-            'msc-data-science': ['data science', 'data analytics', 'analytics', 'big data'],
-            'msc-cybersecurity': ['cybersecurity', 'cyber security', 'information security'],
-            'msc-finance': ['finance', 'financial', 'fintech'],
-            'msc-marketing': ['marketing', 'digital marketing'],
-            'msc-project-management': ['project management', 'pmp']
-        }
-
-        # Specialization keywords
-        self.specialization_keywords = {
-            'finance': ['finance', 'financial', 'banking', 'investment'],
-            'banking': ['banking', 'bank', 'financial services'],
-            'marketing': ['marketing', 'digital marketing', 'brand'],
-            'hr': ['hr', 'human resources', 'people management'],
-            'healthcare': ['healthcare', 'medical', 'health management'],
-            'it': ['it', 'information technology', 'digital transformation'],
-            'supply_chain': ['supply chain', 'logistics', 'operations'],
-            'project_management': ['project management', 'agile', 'scrum'],
-            'data_analytics': ['analytics', 'data analysis', 'business intelligence'],
-            'leadership': ['leadership', 'management', 'executive'],
-            'executive': ['executive', 'executive mba', 'emba']
-        }
-
-        # Field keywords
-        self.field_keywords = {
-            'fees': ['cost', 'fee', 'price', 'pay', 'afford', 'tuition'],
-            'modules': ['modules', 'curriculum', 'subjects', 'courses', 'syllabus'],
-            'duration': ['duration', 'length', 'how long', 'months', 'years'],
-            'intakes': ['intake', 'start', 'when', 'next intake'],
-            'overview': ['about', 'overview', 'details', 'information']
-        }
-
-    def parse_query(self, query: str) -> Tuple[QueryIntent, ExtractedEntities]:
-        """Parse user query into intent and entities."""
-        query_lower = query.lower()
-        entities = ExtractedEntities()
-
-        # Detect intent
-        intent = self._detect_intent(query_lower)
-
-        # Extract entities
-        entities.universities = self._extract_universities(query_lower)
-        entities.programs = self._extract_programs(query_lower)
-        entities.specializations = self._extract_specializations(query_lower)
-        entities.budget_max, entities.budget_min = self._extract_budget(query_lower)
-        entities.duration_preference = self._extract_duration(query_lower)
-        entities.fields_of_interest = self._extract_fields(query_lower)
-
-        return intent, entities
-
-    def _detect_intent(self, query: str) -> QueryIntent:
-        """Detect the primary intent of the query."""
-        if any(word in query for word in ['compare', 'vs', 'versus', 'difference']):
-            return QueryIntent.COMPARE_PROGRAMS
-        elif any(word in query for word in ['cost', 'fee', 'price', 'pay', 'afford']):
-            return QueryIntent.COST_INQUIRY
-        elif any(word in query for word in ['how long', 'duration', 'months', 'years']):
-            return QueryIntent.DURATION_INQUIRY
-        elif any(word in query for word in ['modules', 'curriculum', 'subjects', 'courses']):
-            return QueryIntent.MODULES_INQUIRY
-        elif any(word in query for word in ['intake', 'start', 'when', 'next intake']):
-            return QueryIntent.INTAKE_INQUIRY
-        elif any(word in query for word in ['eligible', 'qualify', 'requirements']):
-            return QueryIntent.ELIGIBILITY_CHECK
-        elif any(word in query for word in ['tell me about', 'details', 'information about', 'overview']):
-            return QueryIntent.PROGRAM_DETAILS
-        else:
-            return QueryIntent.FIND_PROGRAM
-
-    def _extract_universities(self, query: str) -> List[str]:
-        """Extract university slugs from query."""
-        found_unis = []
-        for slug, keywords in self.university_keywords.items():
-            if any(keyword in query for keyword in keywords):
-                found_unis.append(slug)
-        return found_unis if found_unis else None
-
-    def _extract_programs(self, query: str) -> List[str]:
-        """Extract program slugs from query."""
-        found_programs = []
-        for slug, keywords in self.program_keywords.items():
-            if any(keyword in query for keyword in keywords):
-                found_programs.append(slug)
-        return found_programs if found_programs else None
-
-
-    def _extract_budget(self, query: str) -> Tuple[Optional[float], Optional[float]]:
-        """Extract budget constraints from query."""
-        patterns = [
-            r'under\s+[£$]?(\d+[,\d]*)',
-            r'below\s+[£$]?(\d+[,\d]*)',
-            r'less\s+than\s+[£$]?(\d+[,\d]*)',
-            r'between\s+[£$]?(\d+[,\d]*)\s+and\s+[£$]?(\d+[,\d]*)',
-            r'(\d+[,\d]*)\s*-\s*(\d+[,\d]*)',
-            r'max\s+[£$]?(\d+[,\d]*)',
-            r'budget\s+(?:of\s+)?[£$]?(\d+[,\d]*)'
-        ]
-
-        for pattern in patterns:
-            match = re.search(pattern, query)
-            if match:
-                if 'between' in pattern or '-' in pattern:
-                    min_val = float(match.group(1).replace(',', ''))
-                    max_val = float(match.group(2).replace(',', ''))
-                    return max_val, min_val
-                else:
-                    max_val = float(match.group(1).replace(',', ''))
-                    return max_val, None
-
-        return None, None
-
-    def _extract_duration(self, query: str) -> Optional[int]:
-        """Extract duration preference from query."""
-        patterns = [
-            r'(\d+)\s*months?',
-            r'(\d+)\s*years?',
-            r'(\d+\.?\d*)\s*years?'
-        ]
-
-        for pattern in patterns:
-            match = re.search(pattern, query)
-            if match:
-                value = float(match.group(1))
-                if 'year' in pattern:
-                    return int(value * 12)  # Convert years to months
-                return int(value)
-
-        return None
-
-    def _extract_fields(self, query: str) -> List[str]:
-        """Extract fields of interest from query."""
-        found_fields = []
-        for field, keywords in self.field_keywords.items():
-            if any(keyword in query for keyword in keywords):
-                found_fields.append(field)
-        return found_fields if found_fields else ["overview"]  # Default to overview
-
-    def _extract_specializations(self, query: str) -> List[str]:
-        """Extract specialization slugs from query."""
-        found_specializations = []
-        for slug, keywords in self.specialization_keywords.items():
-            if any(keyword in query for keyword in keywords):
-                found_specializations.append(slug)
-        return found_specializations if found_specializations else None
-
-
-class ScopeBuilder:
-    """Build scope objects compatible with existing Stafford GPT architecture."""
-
-    def build_scope(self, intent: QueryIntent, entities: ExtractedEntities) -> Dict[str, Any]:
-        """Convert parsed intent and entities into scope format expected by existing system."""
-
-        # Map intent to mode
-        if intent == QueryIntent.COMPARE_PROGRAMS:
-            mode = "compare"
-        elif intent in [QueryIntent.FIND_PROGRAM, QueryIntent.PROGRAM_DETAILS]:
-            mode = "specific" if entities.universities or entities.programs else "exploratory"
-        else:
-            mode = "specific"
-
-        # Build universities list
-        universities = []
-        if entities.universities:
-            universities = [{"slug": slug} for slug in entities.universities]
-
-        # Build programs list
-        programs = []
-        if entities.programs:
-            for program in entities.programs:
-                program_obj = {"slug": program}
-                # Add program name if available
-                if entities.program_names:
-                    program_obj["program_name"] = entities.program_names[0]
-                programs.append(program_obj)
-
-        # Determine fields of interest
-        fields = entities.fields_of_interest or ["overview"]
-
-        return {
-            "mode": mode,
-            "universities": universities,
-            "programs": programs,
-            "fields": fields,
-            "confidence": 0.8,
-            "budget_constraints": {
-                "max": entities.budget_max,
-                "min": entities.budget_min
-            } if entities.budget_max or entities.budget_min else None,
-            "duration_preference": entities.duration_preference
-        }
-
-
 class PromptsService:
-    """Prompts service that uses intelligent query parsing."""
+    """Simplified prompts service with only essential functionality."""
 
     def __init__(self):
         try:
@@ -266,180 +27,6 @@ class PromptsService:
             print(f"Warning: Failed to initialize OpenAI client: {e}")
             self.llm = None
             self.llm_available = False
-
-        self.query_parser = QueryParser()
-        self.scope_builder = ScopeBuilder()
-
-    def classify_scope(self, question: str, history: str = "") -> Dict[str, Any]:
-        """Scope classification using intelligent query parsing with better follow-up handling."""
-
-        # Check for broad exploratory queries first
-        question_lower = question.lower()
-        broad_query_indicators = [
-            'tell me about your mba programs',
-            'what mba programs',
-            'all mba programs',
-            'mba programs you offer',
-            'tell me about your msc programs',
-            'what msc programs',
-            'all msc programs',
-            'msc programs you offer',
-            'what programs does',
-            'all programs from',
-            'programs available at',
-            'what programs do you have',
-            'show me all programs',
-            'list of programs'
-        ]
-
-        # Force exploratory mode for broad queries
-        if any(indicator in question_lower for indicator in broad_query_indicators):
-            # Parse for university/program entities but keep exploratory mode
-            intent, entities = self.query_parser.parse_query(question)
-            scope = self.scope_builder.build_scope(intent, entities)
-            scope["mode"] = "exploratory"  # Force exploratory mode
-            scope["confidence"] = 0.95
-            scope["parsing_method"] = "broad_query_detection"
-            return scope
-
-        # First, try intelligent parsing
-        intent, entities = self.query_parser.parse_query(question)
-        scope = self.scope_builder.build_scope(intent, entities)
-
-        # If we have high confidence in our parsing, return it
-        if entities.universities or entities.programs or intent != QueryIntent.FIND_PROGRAM:
-            scope["confidence"] = 0.9
-            scope["parsing_method"] = "intelligent"
-            return scope
-
-        # Enhanced context handling for follow-up questions
-        if history and not entities.universities and not entities.programs:
-            # Extract entities from conversation history to maintain context
-            history_intent, history_entities = self.query_parser.parse_query(history)
-
-            # Also look for university/program mentions in the full conversation history
-            history_lower = history.lower()
-
-            # Check for university mentions in history
-            context_universities = []
-            for slug, keywords in self.query_parser.university_keywords.items():
-                if any(keyword in history_lower for keyword in keywords):
-                    context_universities.append(slug)
-
-            # Check for program mentions in history
-            context_programs = []
-            for slug, keywords in self.query_parser.program_keywords.items():
-                if any(keyword in history_lower for keyword in keywords):
-                    context_programs.append(slug)
-
-            # Check for specialization mentions in history
-            context_specializations = []
-            for slug, keywords in self.query_parser.specialization_keywords.items():
-                if any(keyword in history_lower for keyword in keywords):
-                    context_specializations.append(slug)
-
-            # If we found context from history, use it
-            if context_universities or context_programs or context_specializations or history_entities.universities or history_entities.programs or history_entities.specializations:
-                # Merge current intent with historical context
-                merged_entities = ExtractedEntities()
-                merged_entities.universities = entities.universities or history_entities.universities or context_universities
-                merged_entities.programs = entities.programs or history_entities.programs or context_programs
-                merged_entities.specializations = entities.specializations or history_entities.specializations or context_specializations
-                merged_entities.fields_of_interest = entities.fields_of_interest
-                merged_entities.budget_max = entities.budget_max
-                merged_entities.budget_min = entities.budget_min
-                merged_entities.duration_preference = entities.duration_preference
-
-                scope = self.scope_builder.build_scope(intent, merged_entities)
-                scope["mode"] = "specific"  # Maintain specific mode for follow-ups
-                scope["confidence"] = 0.85
-                scope["parsing_method"] = "enhanced_history_context"
-
-                # Add specialization context to scope
-                if merged_entities.specializations:
-                    scope["specializations"] = merged_entities.specializations
-
-                return scope
-
-        # If LLM is not available, return the scope we have
-        if not self.llm_available or not self.llm:
-            scope["confidence"] = 0.5
-            scope["parsing_method"] = "parser_only"
-            return scope
-
-        # Otherwise, fall back to LLM-based classification with enhanced context awareness
-        try:
-            prompt_text = f"""
-            Task: classify the query as "specific", "exploratory", or "compare".
-            Return JSON:
-            
-            {{
-              "mode": "specific|exploratory|compare",
-              "universities": [{{"slug": "<hull|enu|birmingham-city>"}}],
-              "programs": [{{"slug": "<mba|msc-data-science|msc-cybersecurity>", "specialisation":"<optional>"}}],
-              "fields": ["fees|modules|duration|intakes|overview"],
-              "confidence": 0.0
-            }}
-            
-            Rules:
-            - If user names uni/program OR if history shows they were discussing a specific uni/program, it's "specific"
-            - If they ask for alternatives without prior context, it's "exploratory"
-            - If they say "vs" or "compare", it's "compare"
-            - For follow-up questions (like "what are the modules?", "how much?"), check history for context
-            - Pay special attention to university mentions in the conversation history
-            
-            History: {history}
-            Current Question: {question}
-            """
-
-            messages = [
-                SystemMessage(content="You are a Stafford Global query classifier. Maintain context from conversation history for follow-up questions. Return only valid JSON."),
-                HumanMessage(content=prompt_text)
-            ]
-
-            response = self.llm.invoke(messages)
-
-            llm_scope = json.loads(response.content)
-            llm_scope["parsing_method"] = "llm_fallback"
-            return llm_scope
-        except Exception as e:
-            print(f"LLM classification failed: {e}")
-            # Final fallback
-            scope["confidence"] = 0.2
-            scope["parsing_method"] = "fallback"
-            return scope
-
-    def rewrite_queries(self, scope: Dict[str, Any], question: str) -> List[str]:
-        """Rewrite queries based on scope understanding."""
-        # Handle None scope gracefully
-        if scope is None:
-            return [question]
-
-        queries = [question]  # Always include original
-
-        # Add university-specific queries
-        if scope.get("universities"):
-            for uni in scope["universities"]:
-                if uni and uni.get("slug"):
-                    uni_query = f"{uni['slug']} {question}"
-                    queries.append(uni_query)
-
-        # Add program-specific queries
-        if scope.get("programs"):
-            for program in scope["programs"]:
-                if program and program.get("slug"):
-                    prog_query = f"{program['slug']} {question}"
-                    queries.append(prog_query)
-
-        # Add field-specific queries based on intent
-        fields = scope.get("fields", [])
-        if fields:
-            for field in fields[:2]:  # Limit to 2 additional field queries
-                if field:
-                    field_query = f"{field} {question}"
-                    queries.append(field_query)
-
-        return queries[:5]  # Limit total queries
 
     def ground_facts(
         self,
@@ -461,316 +48,349 @@ class PromptsService:
         return {"mode": scope.get("mode", "exploratory"), "items": []}
 
     def _ground_facts_from_canonical(self, scope: Dict[str, Any], rows: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
-        """Create grounded facts directly from canonical data when vector chunks are not available."""
+        """Create grounded facts directly from canonical data with strict data isolation."""
         items = []
 
         for program_variant_id, row in rows.items():
-            # Extract basic info
-            basic_info = json.loads(row.get('basic_info', '{}')) if isinstance(row.get('basic_info'), str) else row.get('basic_info', {})
-            duration_info = json.loads(row.get('duration', '{}')) if isinstance(row.get('duration'), str) else row.get('duration', {})
-            fees_info = json.loads(row.get('fees', '{}')) if isinstance(row.get('fees'), str) else row.get('fees', {})
-            curriculum_info = json.loads(row.get('curriculum', '{}')) if isinstance(row.get('curriculum'), str) else row.get('curriculum', {})
-            learning_outcomes_info = json.loads(row.get('learning_outcomes', '[]')) if isinstance(row.get('learning_outcomes'), str) else row.get('learning_outcomes', [])
+            # STRICT DATA ISOLATION: Only use data from THIS specific program variant
+            # Clear any potential cross-contamination by validating data belongs to this variant
 
-            # Build fields from canonical data
-            fields = {}
+            try:
+                # Extract and validate basic info for THIS program only
+                basic_info = {}
+                if row.get('basic_info'):
+                    if isinstance(row['basic_info'], str):
+                        basic_info = json.loads(row['basic_info'])
+                    else:
+                        basic_info = row['basic_info']
 
-            # Fees information - prioritize discounted fees and mention Stafford Grant
-            if fees_info:
-                currency_symbol = "$" if fees_info.get('currency') == 'USD' else "£"
+                # Validate this data belongs to the current program variant
+                if not basic_info:
+                    print(f"Warning: No basic_info for program_variant_id {program_variant_id}, skipping")
+                    continue
 
-                # Prioritize discounted fees over total fees
-                discounted_fee = fees_info.get('discounted_total_fee')
-                total_fee = fees_info.get('total_fee')
-                discounted_instalment = fees_info.get('discounted_instalment_fee')
-                regular_instalment = fees_info.get('instalment_fee')
+                # Extract and validate duration info for THIS program only
+                duration_info = {}
+                if row.get('duration'):
+                    if isinstance(row['duration'], str):
+                        duration_info = json.loads(row['duration'])
+                    else:
+                        duration_info = row['duration']
 
-                if discounted_fee and total_fee and discounted_fee != total_fee:
-                    # Show discounted fee as primary with Stafford Grant mention
-                    stafford_grant = total_fee - discounted_fee
-                    display_fee = discounted_fee
-                    instalment_fee = discounted_instalment or regular_instalment
+                # Extract and validate fees info for THIS program only
+                fees_info = {}
+                if row.get('fees'):
+                    if isinstance(row['fees'], str):
+                        fees_info = json.loads(row['fees'])
+                    else:
+                        fees_info = row['fees']
 
-                    notes = f"Discounted program fee (includes Stafford Grant of {currency_symbol}{stafford_grant:,.0f})"
-                    if instalment_fee:
-                        notes += f". Installments: {currency_symbol}{instalment_fee:.0f} per {fees_info.get('instalment_period', 1)} month(s)"
+                # Extract and validate curriculum info for THIS program only
+                curriculum_info = {}
+                if row.get('curriculum'):
+                    if isinstance(row['curriculum'], str):
+                        curriculum_info = json.loads(row['curriculum'])
+                    else:
+                        curriculum_info = row['curriculum']
+
+                # Extract and validate learning outcomes for THIS program only
+                learning_outcomes_info = []
+                if row.get('learning_outcomes'):
+                    if isinstance(row['learning_outcomes'], str):
+                        learning_outcomes_info = json.loads(row['learning_outcomes'])
+                    else:
+                        learning_outcomes_info = row['learning_outcomes']
+
+                # Extract and validate entry requirements for THIS program only
+                entry_requirements_info = {}
+                if row.get('entry_requirements'):
+                    if isinstance(row['entry_requirements'], str):
+                        entry_requirements_info = json.loads(row['entry_requirements'])
+                    else:
+                        entry_requirements_info = row['entry_requirements']
+
+                    # DEBUG: Log entry requirements data availability (no debugger)
+                    print(f"DEBUG: Found entry_requirements for {program_variant_id}: {bool(entry_requirements_info)}")
+                    if entry_requirements_info:
+                        print(f"DEBUG: Entry requirements keys: {list(entry_requirements_info.keys())}")
                 else:
-                    # Fall back to total fee
-                    display_fee = total_fee
-                    instalment_fee = regular_instalment
-                    notes = "Total program fee"
-                    if instalment_fee:
-                        notes += f". Installments: {currency_symbol}{instalment_fee:.0f} per {fees_info.get('instalment_period', 1)} month(s)"
+                    print(f"DEBUG: No entry_requirements column for {program_variant_id}")
 
-                if display_fee:
-                    fields['fees'] = {
-                        'value': f"{currency_symbol}{display_fee:,.0f}",
-                        'currency': fees_info.get('currency', 'USD'),
-                        'notes': notes,
-                        'evidence': []
-                    }
+                # Build fields from canonical data - ONLY from this specific program
+                fields = {}
 
-            # Duration information
-            if duration_info:
-                months = duration_info.get('months', duration_info.get('minimum_duration'))
-                if months:
-                    fields['duration'] = {
-                        'value': f"{months} months",
-                        'evidence': []
-                    }
+                # Fees information - STRICT: Only use fees from THIS program variant
+                if fees_info and isinstance(fees_info, dict):
+                    currency_symbol = "$" if fees_info.get('currency') == 'USD' else "£"
 
-                # Intake information
-                intake_start = duration_info.get('intake_start')
-                if intake_start:
-                    fields['intakes'] = {
-                        'value': [intake_start],
-                        'evidence': []
-                    }
+                    # Prioritize discounted fees over total fees
+                    discounted_fee = fees_info.get('discounted_total_fee')
+                    total_fee = fees_info.get('total_fee')
+                    discounted_instalment = fees_info.get('discounted_instalment_fee')
+                    regular_instalment = fees_info.get('instalment_fee')
 
-            # Curriculum/Modules information - THE MISSING PIECE!
-            if curriculum_info:
-                modules_data = []
+                    # VALIDATION: Ensure fees are numeric and reasonable
+                    display_fee = None
+                    instalment_fee = None
 
-                # Add core modules
-                core_modules = curriculum_info.get('core_modules', [])
-                if core_modules:
-                    modules_data.append("**Core Modules:**")
-                    for module in core_modules:
-                        module_name = module.get('module_name', 'Unknown Module')
-                        module_desc = module.get('description', 'No description available')
-                        modules_data.append(f"• **{module_name}**: {module_desc[:200]}{'...' if len(module_desc) > 200 else ''}")
+                    if discounted_fee and total_fee and discounted_fee != total_fee:
+                        # Validate discounted fee is reasonable
+                        if isinstance(discounted_fee, (int, float)) and discounted_fee > 0:
+                            stafford_grant = total_fee - discounted_fee
+                            display_fee = discounted_fee
+                            instalment_fee = discounted_instalment or regular_instalment
 
-                # Add optional/specialization modules - DYNAMIC LABELING
-                optional_modules = curriculum_info.get('optional_modules', [])
-                if optional_modules:
-                    # Determine specialization name dynamically from scope or program data
-                    specialization_name = "Specialization"  # Default fallback
+                            notes = f"Discounted program fee (includes Stafford Grant of {currency_symbol}{stafford_grant:,.0f})"
+                            if instalment_fee and isinstance(instalment_fee, (int, float)) and instalment_fee > 0:
+                                notes += f". Installments: {currency_symbol}{instalment_fee:.0f} per {fees_info.get('instalment_period', 1)} month(s)"
+                    else:
+                        # Fall back to total fee with validation
+                        if total_fee and isinstance(total_fee, (int, float)) and total_fee > 0:
+                            display_fee = total_fee
+                            instalment_fee = regular_instalment
+                            notes = "Total program fee"
+                            if instalment_fee and isinstance(instalment_fee, (int, float)) and instalment_fee > 0:
+                                notes += f". Installments: {currency_symbol}{instalment_fee:.0f} per {fees_info.get('instalment_period', 1)} month(s)"
 
-                    # Try to get specialization from scope first
-                    if scope and scope.get('specializations'):
-                        spec_slug = scope['specializations'][0]  # Take first specialization
-                        # Convert slug to readable name
-                        specialization_mapping = {
-                            'banking': 'Banking',
-                            'finance': 'Finance',
-                            'marketing': 'Marketing',
-                            'hr': 'Human Resources',
-                            'healthcare': 'Healthcare',
-                            'it': 'Information Technology',
-                            'supply_chain': 'Supply Chain',
-                            'project_management': 'Project Management',
-                            'data_analytics': 'Data Analytics',
-                            'leadership': 'Leadership',
-                            'executive': 'Executive'
+                    # Only add fees if we have valid data
+                    if display_fee and display_fee > 0:
+                        fields['fees'] = {
+                            'value': f"{currency_symbol}{display_fee:,.0f}",
+                            'currency': fees_info.get('currency', 'USD'),
+                            'notes': notes,
+                            'evidence': [],
+                            'source_program_id': program_variant_id  # Track data source
                         }
-                        specialization_name = specialization_mapping.get(spec_slug, specialization_name)
 
-                    # Alternatively, try to infer from program name
-                    elif basic_info.get('program_name', '').lower():
-                        program_name_lower = basic_info['program_name'].lower()
-                        if 'banking' in program_name_lower:
-                            specialization_name = 'Banking'
-                        elif 'finance' in program_name_lower:
-                            specialization_name = 'Finance'
-                        elif 'marketing' in program_name_lower:
-                            specialization_name = 'Marketing'
-                        elif 'hr' in program_name_lower or 'human resources' in program_name_lower:
-                            specialization_name = 'Human Resources'
-                        # Add more as needed
+                # Duration information - STRICT: Only use duration from THIS program variant
+                if duration_info and isinstance(duration_info, dict):
+                    months = duration_info.get('months') or duration_info.get('minimum_duration')
+                    if months and isinstance(months, (int, float)) and months > 0:
+                        fields['duration'] = {
+                            'value': f"{int(months)} months",
+                            'evidence': [],
+                            'source_program_id': program_variant_id  # Track data source
+                        }
 
-                    modules_data.append(f"\n**{specialization_name} Specialization Modules:**")
-                    for module in optional_modules:
-                        module_name = module.get('module_name', 'Unknown Module')
-                        module_desc = module.get('description', 'No description available')
-                        modules_data.append(f"• **{module_name}**: {module_desc[:200]}{'...' if len(module_desc) > 200 else ''}")
+                    # Intake information - STRICT: Only use intake from THIS program variant
+                    intake_start = duration_info.get('intake_start')
+                    if intake_start and isinstance(intake_start, str):
+                        fields['intakes'] = {
+                            'value': [intake_start],
+                            'evidence': [],
+                            'source_program_id': program_variant_id  # Track data source
+                        }
 
-                # Add dissertation/project
-                dissertation = curriculum_info.get('dissertation_project')
-                if dissertation and dissertation.get('required'):
-                    modules_data.append(f"\n**{dissertation.get('name', 'Final Project')}**: Required capstone project")
+                # Curriculum/Modules information - STRICT: Only use curriculum from THIS program variant
+                if curriculum_info and isinstance(curriculum_info, dict):
+                    modules_data = []
 
-                if modules_data:
-                    fields['modules'] = {
-                        'value': '\n'.join(modules_data),
-                        'evidence': []
-                    }
+                    # Add core modules
+                    core_modules = curriculum_info.get('core_modules', [])
+                    if isinstance(core_modules, list) and core_modules:
+                        modules_data.append("**Core Modules:**")
+                        for module in core_modules:
+                            if isinstance(module, dict):
+                                module_name = module.get('module_name', 'Unknown Module')
+                                module_desc = module.get('description', 'No description available')
+                                if module_name and module_name != 'Unknown Module':
+                                    modules_data.append(f"• **{module_name}**: {module_desc[:200]}{'...' if len(module_desc) > 200 else ''}")
 
-            # Learning outcomes
-            if learning_outcomes_info:
-                outcomes_text = "Upon completion, students will be able to:\n" + '\n'.join([f"• {outcome}" for outcome in learning_outcomes_info[:8]])  # Limit to 8 outcomes
-                fields['learning_outcomes'] = {
-                    'value': outcomes_text,
-                    'evidence': []
+                    # Add optional/specialization modules
+                    optional_modules = curriculum_info.get('optional_modules', [])
+                    if isinstance(optional_modules, list) and optional_modules:
+                        # Determine specialization name dynamically from scope or program data
+                        specialization_name = "Specialization"  # Default fallback
+
+                        # Try to get specialization from scope first
+                        if scope and scope.get('specializations'):
+                            spec_slug = scope['specializations'][0]  # Take first specialization
+                            # Convert slug to readable name
+                            specialization_mapping = {
+                                'banking': 'Banking',
+                                'finance': 'Finance',
+                                'marketing': 'Marketing',
+                                'hr': 'Human Resources',
+                                'healthcare': 'Healthcare',
+                                'it': 'Information Technology',
+                                'supply_chain': 'Supply Chain',
+                                'project_management': 'Project Management',
+                                'data_analytics': 'Data Analytics',
+                                'leadership': 'Leadership',
+                                'executive': 'Executive'
+                            }
+                            specialization_name = specialization_mapping.get(spec_slug, specialization_name)
+
+                        # Alternatively, try to infer from program name
+                        elif basic_info.get('program_name', '').lower():
+                            program_name_lower = basic_info['program_name'].lower()
+                            if 'banking' in program_name_lower:
+                                specialization_name = 'Banking'
+                            elif 'finance' in program_name_lower:
+                                specialization_name = 'Finance'
+                            elif 'marketing' in program_name_lower:
+                                specialization_name = 'Marketing'
+                            elif 'hr' in program_name_lower or 'human resources' in program_name_lower:
+                                specialization_name = 'Human Resources'
+
+                        modules_data.append(f"\n**{specialization_name} Specialization Modules:**")
+                        for module in optional_modules:
+                            if isinstance(module, dict):
+                                module_name = module.get('module_name', 'Unknown Module')
+                                module_desc = module.get('description', 'No description available')
+                                if module_name and module_name != 'Unknown Module':
+                                    modules_data.append(f"• **{module_name}**: {module_desc[:200]}{'...' if len(module_desc) > 200 else ''}")
+
+                    # Add dissertation/project
+                    dissertation = curriculum_info.get('dissertation_project')
+                    if dissertation and isinstance(dissertation, dict) and dissertation.get('required'):
+                        project_name = dissertation.get('name', 'Final Project')
+                        modules_data.append(f"\n**{project_name}**: Required capstone project")
+
+                    # Only add modules if we have valid data
+                    if modules_data:
+                        fields['modules'] = {
+                            'value': '\n'.join(modules_data),
+                            'evidence': [],
+                            'source_program_id': program_variant_id  # Track data source
+                        }
+
+                # Learning outcomes - STRICT: Only use outcomes from THIS program variant
+                if learning_outcomes_info and isinstance(learning_outcomes_info, list) and learning_outcomes_info:
+                    # Filter out empty or invalid outcomes
+                    valid_outcomes = [outcome for outcome in learning_outcomes_info if outcome and isinstance(outcome, str)]
+                    if valid_outcomes:
+                        outcomes_text = "Upon completion, students will be able to:\n" + '\n'.join([f"• {outcome}" for outcome in valid_outcomes[:8]])  # Limit to 8 outcomes
+                        fields['learning_outcomes'] = {
+                            'value': outcomes_text,
+                            'evidence': [],
+                            'source_program_id': program_variant_id  # Track data source
+                        }
+
+                # Entry Requirements - STRICT: Only use requirements from THIS program variant
+                if entry_requirements_info and isinstance(entry_requirements_info, dict):
+                    requirements_data = []
+
+                    # Degree requirements (mapped from 'degree_requirement')
+                    degree_reqs = entry_requirements_info.get('degree_requirement', [])
+                    if isinstance(degree_reqs, list) and degree_reqs:
+                        requirements_data.append("**Academic Requirements:**")
+                        for req in degree_reqs:
+                            if isinstance(req, str) and req.strip():
+                                requirements_data.append(f"• {req}")
+                    elif isinstance(degree_reqs, str) and degree_reqs.strip():
+                        requirements_data.append("**Academic Requirements:**")
+                        requirements_data.append(f"• {degree_reqs}")
+
+                    # English language requirements (mapped from 'english_requirement')
+                    english_reqs = entry_requirements_info.get('english_requirement', {})
+                    if isinstance(english_reqs, dict) and english_reqs:
+                        requirements_data.append("\n**English Language Requirements:**")
+
+                        # IELTS requirements
+                        ielts_score = english_reqs.get('ielts_score')
+                        if ielts_score:
+                            requirements_data.append(f"• IELTS: {ielts_score} overall")
+
+                        # TOEFL requirements
+                        toefl_score = english_reqs.get('toefl_score')
+                        if toefl_score:
+                            requirements_data.append(f"• TOEFL: {toefl_score}")
+
+                        # Other accepted tests
+                        other_tests = english_reqs.get('other_accepted_tests')
+                        if other_tests:
+                            if isinstance(other_tests, list):
+                                for test in other_tests:
+                                    if isinstance(test, str) and test.strip():
+                                        requirements_data.append(f"• {test}")
+                            elif isinstance(other_tests, str):
+                                requirements_data.append(f"• {other_tests}")
+
+                        # English interview option
+                        if english_reqs.get('english_interview_option'):
+                            requirements_data.append("• English interview available as alternative")
+
+                        # Note for non-native speakers
+                        if english_reqs.get('required_if_non_native'):
+                            requirements_data.append("• Required for non-native English speakers")
+
+                    # Work experience requirements (mapped from 'work_requirement')
+                    work_req = entry_requirements_info.get('work_requirement', {})
+                    if isinstance(work_req, dict) and work_req:
+                        requirements_data.append("\n**Work Experience:**")
+
+                        years = work_req.get('work_experience_years')
+                        management_required = work_req.get('management_experience_required')
+
+                        if years:
+                            exp_text = f"Minimum {years} years of professional experience"
+                            if management_required:
+                                exp_text += " with management responsibilities"
+                            requirements_data.append(f"• {exp_text}")
+                        elif management_required:
+                            requirements_data.append("• Management experience required")
+
+                    # Only add entry requirements if we have valid data
+                    if requirements_data:
+                        fields['entry_requirements'] = {
+                            'value': '\n'.join(requirements_data),
+                            'evidence': [],
+                            'source_program_id': program_variant_id  # Track data source
+                        }
+
+                # Program overview - STRICT: Only use overview from THIS program variant
+                program_name = basic_info.get('program_name', 'Unknown Program')
+                university_name = basic_info.get('university_name', 'Unknown University')
+                program_type = basic_info.get('program_type', row.get('program_type', 'Unknown'))
+                program_overview = basic_info.get('program_overview', '')
+
+                # Validate program identifiers
+                if not program_name or program_name == 'Unknown Program':
+                    print(f"Warning: Invalid program_name for program_variant_id {program_variant_id}")
+                if not university_name or university_name == 'Unknown University':
+                    print(f"Warning: Invalid university_name for program_variant_id {program_variant_id}")
+
+                # Use the detailed program overview if available, otherwise use basic description
+                if program_overview and isinstance(program_overview, str):
+                    overview_text = program_overview
+                else:
+                    overview_text = f"The {program_name} is a {program_type.lower()} program offered by {university_name} through Stafford Global."
+
+                fields['overview'] = {
+                    'value': overview_text,
+                    'evidence': [],
+                    'source_program_id': program_variant_id  # Track data source
                 }
 
-            # Program overview
-            program_name = basic_info.get('program_name', 'Unknown Program')
-            university_name = basic_info.get('university_name', 'Unknown University')
-            program_type = basic_info.get('program_type', row.get('program_type', 'Unknown'))
-            program_overview = basic_info.get('program_overview', '')
+                # Determine university and program slugs with validation
+                university_slug = row.get('university_id', 'unknown')
+                program_slug = 'mba' if 'mba' in program_type.lower() else 'unknown'
 
-            # Use the detailed program overview if available, otherwise use basic description
-            if program_overview:
-                overview_text = program_overview
-            else:
-                overview_text = f"The {program_name} is a {program_type.lower()} program offered by {university_name} through Stafford Global."
-
-            fields['overview'] = {
-                'value': overview_text,
-                'evidence': []
-            }
-
-            # Determine university and program slugs
-            university_slug = row.get('university_id', 'unknown')
-            program_slug = 'mba' if 'mba' in program_type.lower() else 'unknown'
-
-            item = {
-                'program_variant_id': program_variant_id,
-                'university_slug': university_slug,
-                'program_slug': program_slug,
-                'meets_budget': True,  # Will be filtered later if needed
-                'meets_duration': True,  # Will be filtered later if needed
-                'fields': fields
-            }
-
-            items.append(item)
-
-        result = {
-            "mode": scope.get("mode", "specific"),
-            "items": items
-        }
-
-        # Apply filters
-        if scope.get('budget_constraints') or scope.get('duration_preference'):
-            result = self._apply_filters(result, scope)
-
-        return result
-
-    def _ground_facts_from_canonical_with_evidence(
-        self,
-        scope: Dict[str, Any],
-        rows: Dict[str, Dict[str, Any]],
-        chunks_by_variant: Dict[str, List[Dict[str, Any]]]
-    ) -> Dict[str, Any]:
-        """Create grounded facts from canonical data enhanced with vector evidence."""
-        items = []
-
-        for program_variant_id, row in rows.items():
-            # Start with canonical data (reliable source of truth)
-            basic_info = json.loads(row.get('basic_info', '{}')) if isinstance(row.get('basic_info'), str) else row.get('basic_info', {})
-            duration_info = json.loads(row.get('duration', '{}')) if isinstance(row.get('duration'), str) else row.get('duration', {})
-            fees_info = json.loads(row.get('fees', '{}')) if isinstance(row.get('fees'), str) else row.get('fees', {})
-
-            # Get vector chunks for this program variant
-            program_chunks = chunks_by_variant.get(program_variant_id, [])
-
-            # Build fields from canonical data
-            fields = {}
-
-            # Fees information (canonical + evidence)
-            if fees_info:
-                currency_symbol = "$" if fees_info.get('currency') == 'USD' else "£"
-                total_fee = fees_info.get('total_fee', fees_info.get('discounted_total_fee'))
-                if total_fee:
-                    # Find relevant evidence chunks about fees/cost
-                    fee_evidence = []
-                    for chunk in program_chunks[:3]:  # Limit to 3 most relevant chunks
-                        content = chunk.get('content', '').lower()
-                        if any(word in content for word in ['fee', 'cost', 'price', 'tuition', 'payment']):
-                            fee_evidence.append({
-                                'quote': chunk.get('content', '')[:200] + '...' if len(chunk.get('content', '')) > 200 else chunk.get('content', ''),
-                                'source': chunk.get('source', 'website'),
-                                'similarity': chunk.get('similarity', 0.8)
-                            })
-
-                    fields['fees'] = {
-                        'value': f"{currency_symbol}{total_fee:,.0f}",
-                        'currency': fees_info.get('currency', 'USD'),
-                        'notes': f"Total program fee. Installments: {currency_symbol}{fees_info.get('instalment_fee', 0):.0f} per {fees_info.get('instalment_period', 1)} month(s)" if fees_info.get('instalment_fee') else "",
-                        'evidence': fee_evidence
+                # Create the item with strict data isolation
+                item = {
+                    'program_variant_id': program_variant_id,
+                    'university_slug': university_slug,
+                    'program_slug': program_slug,
+                    'meets_budget': True,  # Will be filtered later if needed
+                    'meets_duration': True,  # Will be filtered later if needed
+                    'fields': fields,
+                    'data_validation': {
+                        'has_valid_basic_info': bool(basic_info),
+                        'has_valid_fees': 'fees' in fields,
+                        'has_valid_duration': 'duration' in fields,
+                        'has_valid_curriculum': 'modules' in fields,
+                        'has_valid_entry_requirements': 'entry_requirements' in fields,
+                        'source_verified': True
                     }
+                }
 
-            # Duration information (canonical + evidence)
-            if duration_info:
-                months = duration_info.get('months', duration_info.get('minimum_duration'))
-                if months:
-                    # Find relevant evidence chunks about duration
-                    duration_evidence = []
-                    for chunk in program_chunks[:3]:
-                        content = chunk.get('content', '').lower()
-                        if any(word in content for word in ['month', 'duration', 'length', 'time', 'year']):
-                            duration_evidence.append({
-                                'quote': chunk.get('content', '')[:200] + '...' if len(chunk.get('content', '')) > 200 else chunk.get('content', ''),
-                                'source': chunk.get('source', 'website'),
-                                'similarity': chunk.get('similarity', 0.8)
-                            })
+                items.append(item)
 
-                    fields['duration'] = {
-                        'value': f"{months} months",
-                        'evidence': duration_evidence
-                    }
-
-                # Intake information (canonical + evidence)
-                intake_start = duration_info.get('intake_start')
-                if intake_start:
-                    # Find relevant evidence chunks about intakes
-                    intake_evidence = []
-                    for chunk in program_chunks[:3]:
-                        content = chunk.get('content', '').lower()
-                        if any(word in content for word in ['intake', 'start', 'begin', 'commence', 'enrollment']):
-                            intake_evidence.append({
-                                'quote': chunk.get('content', '')[:200] + '...' if len(chunk.get('content', '')) > 200 else chunk.get('content', ''),
-                                'source': chunk.get('source', 'website'),
-                                'similarity': chunk.get('similarity', 0.8)
-                            })
-
-                    fields['intakes'] = {
-                        'value': [intake_start],
-                        'evidence': intake_evidence
-                    }
-
-            # Program overview (canonical + enhanced with vector evidence)
-            program_name = basic_info.get('program_name', 'Unknown Program')
-            university_name = basic_info.get('university_name', 'Unknown University')
-            program_type = basic_info.get('program_type', row.get('program_type', 'Unknown'))
-
-            # Enhance overview with vector evidence
-            overview_base = f"The {program_name} is a {program_type.lower()} program offered by {university_name} through Stafford Global."
-
-            # Add additional context from vector chunks
-            additional_context = []
-            for chunk in program_chunks[:2]:  # Use top 2 chunks for overview enhancement
-                content = chunk.get('content', '')
-                if len(content) > 50 and 'cookie' not in content.lower():  # Filter out boilerplate
-                    additional_context.append(content[:150] + '...' if len(content) > 150 else content)
-
-            overview_evidence = []
-            if additional_context:
-                overview_evidence = [{
-                    'quote': context,
-                    'source': 'website',
-                    'similarity': 0.8
-                } for context in additional_context]
-
-            fields['overview'] = {
-                'value': overview_base,
-                'evidence': overview_evidence
-            }
-
-            # Determine university and program slugs
-            university_slug = row.get('university_id', 'unknown')
-            program_slug = 'mba' if 'mba' in program_type.lower() else 'unknown'
-
-            item = {
-                'program_variant_id': program_variant_id,
-                'university_slug': university_slug,
-                'program_slug': program_slug,
-                'meets_budget': True,  # Will be filtered later if needed
-                'meets_duration': True,  # Will be filtered later if needed
-                'fields': fields
-            }
-
-            items.append(item)
+            except Exception as e:
+                print(f"Error processing program_variant_id {program_variant_id}: {e}")
+                # Skip this program variant if there's any error to prevent contamination
+                continue
 
         result = {
             "mode": scope.get("mode", "specific"),
@@ -797,7 +417,7 @@ class PromptsService:
             if budget and item.get('fields', {}).get('fees', {}).get('value'):
                 try:
                     fee_str = item['fields']['fees']['value']
-                    # Extract numeric value (handle £9,750 format)
+                    # Extract numeric value (handle ��9,750 format)
                     fee_val = float(re.sub(r'[£$,]', '', fee_str))
 
                     if budget.get('max') and fee_val > budget['max']:
@@ -916,6 +536,7 @@ class PromptsService:
             - ONLY include fees/costs if user specifically asks about pricing, costs, fees, or affordability
             - ONLY include duration/timeline if user specifically asks about time, duration, or how long
             - ONLY include specific intake dates if user specifically asks about start dates or when programs begin
+            - ONLY include entry requirements if user specifically asks about requirements, qualifications, eligibility, or admission criteria
             - For general program inquiries, focus on program types, specializations, and general overview
             - Keep responses under 250 words and well-structured
             - Use specific data from the grounded information when available
@@ -925,6 +546,7 @@ class PromptsService:
             - DO NOT mention specific fees, costs, or pricing unless explicitly asked
             - DO NOT mention specific durations, months, or timeframes unless explicitly asked  
             - DO NOT mention specific intake dates unless explicitly asked
+            - DO NOT mention entry requirements, IELTS, TOEFL, academic qualifications unless explicitly asked
             - DO NOT include payment installment details unless explicitly asked
             - Focus on program content, types, and academic aspects for general queries
             
